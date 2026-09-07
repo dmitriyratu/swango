@@ -62,8 +62,8 @@ export class PeopleScene{
      varying vec3 clothPosition;
      float surfaceNoise(vec3 p){return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);}
     `).replace('#include <color_fragment>',`#include <color_fragment>
-     vec3 patch=floor(clothPosition*${fabric?'85.':'115.'});
-     float wear=surfaceNoise(patch);
+     vec3 surfaceCell=floor(clothPosition*${fabric?'85.':'115.'});
+     float wear=surfaceNoise(surfaceCell);
      float fleck=surfaceNoise(floor(clothPosition*370.));
      diffuseColor.rgb*=mix(${fabric?'.67,1.15':'.88,1.06'},wear);
      diffuseColor.rgb*=mix(.92,1.05,fleck);
