@@ -9,6 +9,7 @@ export default function Home() {
   const game = useRef<Game | null>(null);
   const [ready, setReady] = useState(false), [error, setError] = useState(false);
   const [playing, setPlaying] = useState(false), [paused, setPaused] = useState(false), [sound, setSound] = useState(false);
+  const playingRef=useRef(playing);playingRef.current=playing;
   const [near, setNear] = useState<Resident | null>(null);
   const [talk, setTalk] = useState<Conversation | null>(null);
   const [heard, setHeard] = useState<string[]>([]);
@@ -18,10 +19,10 @@ export default function Home() {
     if (!canvas.current) return;
     const g = new Game(canvas.current, { nearby: setNear, conversation: c => { setTalk(c); if(c) setHeard(old => old.includes(c.resident.id) ? old : [...old,c.resident.id]); }, aside: setAside, pause: () => setPaused(p => !p) });
     game.current = g;
-    g.load().then(()=>setReady(true)).catch(()=>setError(true));
+    g.load().then(()=>{setReady(true);if(playingRef.current)g.start();}).catch(()=>setError(true));
     return () => { g.destroy(); game.current = null; };
   }, []);
-  useEffect(() => { if(game.current) game.current.paused = paused; }, [paused]);
+  useEffect(() => { game.current?.setPaused(paused); }, [paused]);
   useEffect(() => {
     const context=(document as Document & {modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>void|Promise<void>}}).modelContext;
     if(!context?.registerTool||!ready)return;

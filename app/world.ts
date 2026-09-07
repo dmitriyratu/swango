@@ -34,6 +34,11 @@ export class Game {
   private ctx:CanvasRenderingContext2D;
   private background:HTMLImageElement|null=null;
   private sprites:HTMLCanvasElement[]=[];
+  private heroWalk:HTMLCanvasElement[]=[];
+  private crowdWalk:HTMLCanvasElement[][]=[];
+  private residentIdles:HTMLCanvasElement[][]=[];
+  private puff:HTMLCanvasElement|null=null;
+  private residentMotion=new Map<string,{walk:boolean;flip:number}>();
   private frame=0;private destroyed=false;private last=0;private time=0;
   private keys=new Set<string>();private target:Point|null=null;private autoTalk:string|null=null;
   private player={x:594,y:683};private facing=1;private moving=false;
@@ -61,8 +66,30 @@ export class Game {
       x.putImageData(data,0,0);const trimmed=document.createElement('canvas');trimmed.width=right-left+1;trimmed.height=bottom-top+1;trimmed.getContext('2d')!.drawImage(c,left,top,trimmed.width,trimmed.height,0,0,trimmed.width,trimmed.height);this.sprites.push(trimmed);
     }
     this.frame=requestAnimationFrame(this.tick);
+    // Animation atlases are separate so each person can move at an independent pace.
+    const atlases=await Promise.allSettled([get('/swango-walk.png'),get('/crowd-walk.png'),get('/resident-idles.png')]);
+    if(this.destroyed)return;
+    if(atlases[0].status==='fulfilled')this.heroWalk=this.atlas(atlases[0].value,4,2).flat();
+    if(atlases[1].status==='fulfilled')this.crowdWalk=this.atlas(atlases[1].value,4,2);
+    if(atlases[2].status==='fulfilled')this.residentIdles=this.atlas(atlases[2].value,4,4);
+  }
+  private atlas(image:HTMLImageElement,columns:number,rows:number){
+    const result:HTMLCanvasElement[][]=[],cw=image.width/columns,ch=image.height/rows;
+    for(let row=0;row<rows;row++){
+      const frames:HTMLCanvasElement[]=[];
+      for(let col=0;col<columns;col++){
+        const rowTop=rows===4?[0,255,514,763][row]:row*ch,rowBottom=rows===4?[255,514,763,1024][row]:(row+1)*ch,cellHeight=rowBottom-rowTop;
+        const frame=document.createElement('canvas');frame.width=cw;frame.height=cellHeight;const c=frame.getContext('2d')!;
+        c.drawImage(image,col*cw,rowTop,cw,cellHeight,0,0,cw,cellHeight);const d=c.getImageData(0,0,cw,cellHeight);
+        let left=cw,right=-1,top=cellHeight,bottom=-1;
+        for(let y=0;y<cellHeight;y++)for(let x=0;x<cw;x++){const k=(y*cw+x)*4,r=d.data[k],g=d.data[k+1],b=d.data[k+2];if(r>g*1.5&&b>g*1.5&&r>120&&b>100)d.data[k+3]=0;else{left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}}
+        c.putImageData(d,0,0);const trim=document.createElement('canvas');trim.width=Math.max(1,right-left+1);trim.height=Math.max(1,bottom-top+1);trim.getContext('2d')!.drawImage(frame,left,top,trim.width,trim.height,0,0,trim.width,trim.height);frames.push(trim);
+      }
+      result.push(frames);
+    }return result;
   }
   start(){this.playing=true;this.paused=false;this.keys.clear();this.target=null;this.nextAside=this.time+7;}
+  setPaused(value:boolean){this.paused=value;this.keys.clear();this.target=null;}
   home(){this.playing=false;this.keys.clear();this.target=null;this.conversation=null;this.near=null;this.cb.conversation(null);this.cb.nearby(null);this.cb.aside(null);}
   setDirection(dir:string,on:boolean){if(on){this.keys.add(dir);this.target=null;this.autoTalk=null;}else this.keys.delete(dir);}
   interact(){if(this.paused||!this.playing||this.conversation)return;const n=closest(this.player,RESIDENTS);if(!n)return;const i=nextIndex(n.lines.length,this.previous[n.id]??-1);this.previous[n.id]=i;this.conversation={...n.lines[i],resident:n};this.keys.clear();this.target=null;this.cb.conversation(this.conversation);this.cb.aside(null);}
@@ -94,7 +121,15 @@ export class Game {
     if(!this.paused){this.time+=dt;this.update(dt);}this.draw();this.frame=requestAnimationFrame(this.tick);
   };
   private update(dt:number){
-    this.moving=false;if(!this.playing||this.conversation)return;
+    this.moving=false;
+    for(const [i,n] of RESIDENTS.entries()){
+      const busy=this.conversation?.resident.id===n.id||Math.hypot(this.player.x-n.x,this.player.y-n.y)<112;
+      const phase=(this.time+i*13)%40,walk=!busy&&(i===2||i===3)&&phase<12;
+      const direction=Math.floor((this.time+i*13)/40)%2===0?1:-1;
+      if(walk){n.x=Math.max(i===2?340:755,Math.min(i===2?510:920,n.x+direction*dt*12));}
+      this.residentMotion.set(n.id,{walk,flip:busy?(this.player.x<n.x?-1:1):direction});
+    }
+    if(!this.playing||this.conversation)return;
     let dx=Number(this.keys.has('right'))-Number(this.keys.has('left')),dy=Number(this.keys.has('down'))-Number(this.keys.has('up'));
     if(this.target&&!dx&&!dy){const x=this.target.x-this.player.x,y=this.target.y-this.player.y;if(Math.hypot(x,y)<4){this.target=null;if(this.autoTalk){this.autoTalk=null;this.interact();}}else{dx=x/155;dy=y/82;}}
     if(dx||dy){const p=movePoint(this.player,dx,dy,dt);this.moving=Math.hypot(p.x-this.player.x,p.y-this.player.y)>.01;if(dx)this.facing=dx<0?-1:1;this.player=p;}
@@ -102,16 +137,23 @@ export class Game {
     if(this.clearAside&&this.time>this.clearAside){this.cb.aside(null);this.clearAside=0;}
     if(this.time>this.nextAside){const n=RESIDENTS[Math.floor(Math.random()*RESIDENTS.length)];this.cb.aside({name:n.name,line:n.asides[Math.floor(Math.random()*n.asides.length)]});this.clearAside=this.time+6;this.nextAside=this.time+16+Math.random()*6;}
   }
-  private person(index:number,x:number,y:number,walk=false,flip=1,hero=false){
-    const c=this.ctx,im=this.sprites[index];if(!im)return;
+  private person(index:number,x:number,y:number,walk=false,flip=1,hero=false,crowd=-1,offset=0){
+    const c=this.ctx,clock=this.reduced?0:this.time;
+    const sequence=hero&&walk?this.heroWalk:crowd>=0?this.crowdWalk[crowd]:!hero?this.residentIdles[index-1]:undefined;
+    const animated=sequence&&sequence.length>0;
+    const idleSequence=[0,0,0,0,1,2,3,3,2,1,0,0];
+    const fi=walk?Math.floor(clock*8+offset)%Math.max(1,sequence?.length??1):idleSequence[Math.floor(clock*2.5+offset)%idleSequence.length];
+    const im=animated?sequence[fi%sequence.length]:this.sprites[index];if(!im)return;
     const depth=.83+(y-600)/450,h=139*depth,w=im.width/im.height*h;
-    const phase=this.time*10,bob=walk?Math.abs(Math.sin(phase))*2:Math.sin(this.time*1.6+index)*.35;
+    const phase=clock*10+offset,bob=walk?Math.abs(Math.sin(phase))*2:Math.sin(clock*1.6+index)*.7;
     c.fillStyle='#020c0bac';c.beginPath();c.ellipse(x,y+2,w*.65,6*depth,0,0,Math.PI*2);c.fill();
     if(hero&&this.playing){c.strokeStyle='#dfb96a88';c.lineWidth=1.2;c.beginPath();c.ellipse(x,y+3,w*.62,7,0,0,Math.PI*2);c.stroke();}
     c.save();c.translate(x,y);c.scale(flip,1);
-    c.save();c.scale(1,-.25);c.globalAlpha=.10;c.drawImage(im,-w/2,-h,w,h);c.restore();
+    c.save();c.scale(1,-.28);c.globalAlpha=.19;
+    for(let sy=0;sy<im.height;sy+=12){const sh=Math.min(12,im.height-sy),ripple=Math.sin(sy*.09+clock*3)*2;c.drawImage(im,0,sy,im.width,sh,-w/2+ripple,-h+sy/im.height*h,w,sh/im.height*h+1);}
+    c.restore();
     c.translate(0,-bob);
-    if(walk){const split=.62,upper=h*split,leg=h-upper,sway=Math.sin(phase)*2.3;
+    if(walk&&!animated){const split=.62,upper=h*split,leg=h-upper,sway=Math.sin(phase)*2.3;
       c.drawImage(im,0,0,im.width,im.height*split,-w/2,-h+sway*.12,w,upper);
       c.drawImage(im,0,im.height*split,im.width/2,im.height*(1-split),-w/2-1,-leg+Math.max(0,sway),w/2+1,leg-Math.max(0,sway));
       c.drawImage(im,im.width/2,im.height*split,im.width/2,im.height*(1-split),0,-leg+Math.max(0,-sway),w/2+1,leg-Math.max(0,-sway));
@@ -125,19 +167,39 @@ export class Game {
     // Animated light spill, rain, reflections and rising vapor sit over the painted set.
     c.save();c.globalCompositeOperation='screen';
     const glow=(x:number,y:number,r:number,color:string)=>{const g=c.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,color);g.addColorStop(1,'transparent');c.fillStyle=g;c.fillRect(x-r,y-r,r*2,r*2);};
-    glow(933,304,160,`rgba(15,132,104,${.07+.02*Math.sin(t*2)})`);glow(180,419,170,`rgba(172,87,20,${.07+.015*Math.sin(t)})`);
-    for(let i=0;i<14;i++){const f=(t*.095+i/14)%1,x=177+Math.sin(i*3.1+f*3)*16,y=490-f*115;glow(x,y,15+f*25,`rgba(178,198,163,${.045*(1-f)})`);}
+    const flicker=Math.sin(t*2.1)>.95?.03:.12;
+    glow(933,304,180,`rgba(15,165,122,${flicker+.04*Math.sin(t*3)})`);glow(180,419,180,`rgba(208,105,29,${.12+.035*Math.sin(t*1.7)})`);
+    glow(700+Math.sin(t*.13)*460,730,200,`rgba(39,145,148,${.04+.04*Math.sin(t*.7)})`);
+    c.globalAlpha=.08+.07*Math.abs(Math.sin(t*.6));c.drawImage(this.background,1120,344,226,84,875,269,176.5,65.6);c.globalAlpha=1;
     c.restore();
-    const people=RESIDENTS.map(n=>({index:n.sprite,x:n.x,y:n.y,walk:false,flip:n.id==='nell'?-1:1,hero:false}));
-    people.push({index:5,x:410+(Math.sin(t*.075)+1)*174,y:610,walk:!this.reduced,flip:Math.cos(t*.075)>0?1:-1,hero:false});
-    people.push({index:0,x:this.player.x,y:this.player.y,walk:this.moving,flip:this.facing,hero:true});
-    people.sort((a,b)=>a.y-b.y).forEach(p=>this.person(p.index,p.x,p.y,p.walk,p.flip,p.hero));
+    // Rotate only the fan interiors; the surrounding housings stay fixed in the set.
+    for(const [x,y,r,speed] of [[272,100,17,2.4],[861,217,18,-3.1],[1178,203,14,4]]){
+      c.save();c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.clip();c.translate(x,y);c.rotate(t*speed);c.drawImage(this.background,(x-r)*1.28,(y-r)*1.28,r*2*1.28,r*2*1.28,-r,-r,r*2,r*2);c.restore();
+    }
+    this.steam(177,493,100,t,1);this.steam(1035,577,75,t,2);
+    const people=RESIDENTS.map(n=>({index:n.sprite,x:n.x,y:n.y,walk:this.residentMotion.get(n.id)?.walk??false,flip:this.residentMotion.get(n.id)?.flip??1,hero:false,crowd:-1,offset:n.sprite*2.4}));
+    for(let i=0;i<7;i++){
+      const direction=i%2?1:-1,progress=(t*(.017+i*.0015)+i*.173)%1;
+      const x=direction===1?-100+progress*1400:1300-progress*1400,y=606+(i%4)*35;
+      people.push({index:5,x,y,walk:!this.reduced,flip:direction,hero:false,crowd:i%2,offset:i*1.71});
+    }
+    // Smaller figures drift through the far passage, behind the walkable foreground.
+    for(let i=0;i<3;i++){const f=(t*.02+i*.34)%1;people.push({index:5,x:565+Math.sin(i*3+f)*22,y:505+f*96,walk:!this.reduced,flip:i%2?1:-1,hero:false,crowd:i%2,offset:i*3});}
+    people.push({index:0,x:this.player.x,y:this.player.y,walk:this.moving,flip:this.facing,hero:true,crowd:-1,offset:0});
+    people.sort((a,b)=>a.y-b.y).forEach(p=>this.person(p.index,p.x,p.y,p.walk,p.flip,p.hero,p.crowd,p.offset));
+    this.steam(695,756,125,t,3);
     c.save();c.lineWidth=1;
-    for(let i=0;i<85;i++){const x=(i*139.31+t*20)%1200,y=(i*83.61+t*270)%800;c.strokeStyle=`rgba(153,191,175,${.07+(i%3)*.025})`;c.beginPath();c.moveTo(x,y);c.lineTo(x-2,y+9);c.stroke();}
+    for(let i=0;i<130;i++){const x=(i*139.31+t*20)%1200,y=(i*83.61+t*(230+(i%4)*20))%800;c.strokeStyle=`rgba(153,191,175,${.08+(i%3)*.025})`;c.beginPath();c.moveTo(x,y);c.lineTo(x-2,y+9);c.stroke();}
     for(let i=0;i<18;i++){const x=(i*67+35)%1200,y=600+(i*43)%175,f=(t*.8+i*.37)%1;c.strokeStyle=`rgba(158,200,172,${(1-f)*.12})`;c.beginPath();c.ellipse(x,y,2+f*10,1+f*2,0,0,Math.PI*2);c.stroke();}
     c.restore();
     if(this.target&&this.playing){c.strokeStyle='#e9c88288';c.beginPath();c.ellipse(this.target.x,this.target.y,8,3,0,0,Math.PI*2);c.stroke();}
     if(this.near&&this.playing&&!this.conversation){const n=this.near,h=139*(.83+(n.y-600)/450);c.font='12px monospace';c.textAlign='center';const w=c.measureText(n.name).width+20;c.fillStyle='#0a1d18e0';c.fillRect(n.x-w/2,n.y-h-28,w,21);c.fillStyle='#e9cf94';c.fillText(n.name,n.x,n.y-h-13);}
+  }
+  private steam(x:number,y:number,height:number,t:number,seed:number){
+    if(!this.puff){const p=document.createElement('canvas');p.width=96;p.height=96;const pc=p.getContext('2d')!,g=pc.createRadialGradient(48,48,0,48,48,48);g.addColorStop(0,'#bdc8b4');g.addColorStop(.35,'#bdc8b49a');g.addColorStop(1,'#bdc8b400');pc.fillStyle=g;pc.fillRect(0,0,96,96);this.puff=p;}
+    const c=this.ctx;c.save();
+    for(let i=0;i<13;i++){const f=(t*.13+i/13+seed*.24)%1,s=20+f*58,drift=Math.sin(i*2.13+f*4+seed)*12+f*28;c.globalAlpha=Math.sin(f*Math.PI)*.13;c.drawImage(this.puff,x+drift-s/2,y-f*height-s/2,s,s*1.2);}
+    c.restore();
   }
   destroy(){this.destroyed=true;cancelAnimationFrame(this.frame);window.removeEventListener('keydown',this.keydown);window.removeEventListener('keyup',this.keyup);window.removeEventListener('blur',this.blur);this.canvas.removeEventListener('pointerdown',this.pointer);}
 }
