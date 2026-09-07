@@ -2,147 +2,79 @@ import * as T from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import type { Activity } from './street-life';
+import {civilianNames,wardrobe,dressCivilian,poseCivilian} from './civilian-style';
 export type ActorPose={id:string;model:string;x:number;y:number;height:number;vx:number;vy:number;face:number;activity:Activity;skin?:number;coat?:string;carrying?:boolean};
-type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;actions:Record<string,T.AnimationAction>;current:string;face:number;props:T.Object3D[];height:number;head?:T.Object3D};
+type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D};
+type Surface={map:T.Texture;normal:T.Texture;mask1:T.Texture;mask2:T.Texture};
 export class PeopleScene{
  readonly canvas:HTMLCanvasElement;
  private renderer:T.WebGLRenderer;
  private scene=new T.Scene();private camera=new T.OrthographicCamera(-600,600,400,-400,.1,3000);
- private templates=new Map<string,GLTF>();private actors=new Map<string,Rig>();
+ private templates=new Map<string,GLTF>();private surfaces=new Map<string,Surface>();private actors=new Map<string,Rig>();
  private animatedProps:{object:T.Object3D;kind:string;seed:number}[]=[];
- private lastTime=0;
- private checkedPixels=false;
- private target=new T.WebGLRenderTarget(1200,800,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,samples:4});
- private finishScene=new T.Scene();
- private finishCamera=new T.OrthographicCamera(-1,1,1,-1,0,1);
- private finishMaterial=new T.ShaderMaterial({
-  uniforms:{picture:{value:this.target.texture}},
-  vertexShader:`varying vec2 imageUv; void main(){imageUv=uv;gl_Position=vec4(position.xy,0.,1.);}`,
-  fragmentShader:`uniform sampler2D picture; varying vec2 imageUv;
-   void main(){
-    gl_FragColor=texture2D(picture,imageUv);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-    // Ordered grain is stable, never randomized each frame. Preserve alpha at silhouettes.
-    vec2 cell=mod(floor(gl_FragCoord.xy),4.);
-    float a=mod(cell.x,2.)*2.+mod(cell.y,2.);
-    float b=floor(cell.x/2.)*2.+floor(cell.y/2.);
-    float grain=(mod(a*3.,4.)*4.+mod(b*3.,4.)+.5)/16.-.5;
-    vec3 rgb=gl_FragColor.rgb;
-    float luminance=dot(rgb,vec3(.2126,.7152,.0722));
-    rgb=mix(vec3(luminance),rgb,.73);
-    rgb=mix(vec3(.026,.051,.043),rgb,.94);
-    gl_FragColor.rgb=clamp(floor(rgb*63.+grain*.25+.5)/63.,0.,1.);
-   }`,depthTest:false,depthWrite:false,transparent:true,
- });
+ private lastTime=0;private checkedPixels=false;
  constructor(){
-  this.renderer=new T.WebGLRenderer({alpha:true,antialias:false,premultipliedAlpha:true});this.renderer.setPixelRatio(1);this.renderer.setSize(1200,800,false);this.renderer.setClearColor(0x000000,0);this.renderer.outputColorSpace=T.SRGBColorSpace;
-  this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.08;
-  const screen=new T.Mesh(new T.PlaneGeometry(2,2),this.finishMaterial);screen.frustumCulled=false;this.finishScene.add(screen);
+  this.renderer=new T.WebGLRenderer({alpha:true,antialias:true,premultipliedAlpha:true});
+  this.renderer.setPixelRatio(1);this.renderer.setSize(1800,1200,false);this.renderer.setClearColor(0x000000,0);
+  this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.05;
   this.canvas=this.renderer.domElement;this.camera.position.set(0,0,1200);this.camera.lookAt(0,0,0);
-  this.scene.add(new T.HemisphereLight(0x9aa99b,0x30291f,1.35));
-  const faceLight=new T.DirectionalLight(0xe9dcc2,.8);faceLight.position.set(0,170,600);this.scene.add(faceLight);
-  const warm=new T.DirectionalLight(0xffc87e,2.3);warm.position.set(-500,650,160);this.scene.add(warm);
-  const cool=new T.DirectionalLight(0x65bfb6,1.8);cool.position.set(550,260,-200);this.scene.add(cool);
+  this.scene.add(new T.HemisphereLight(0xb7c7bf,0x34312c,1.35));
+  const front=new T.DirectionalLight(0xf2e5ce,1.1);front.position.set(0,250,800);this.scene.add(front);
+  const warm=new T.DirectionalLight(0xffc783,1.75);warm.position.set(-500,650,300);this.scene.add(warm);
+  const cool=new T.DirectionalLight(0x76cabe,1.55);cool.position.set(550,250,-100);this.scene.add(cool);
   this.makeProps();
  }
- async load(){const loader=new GLTFLoader();await Promise.all(['hoodie','worker','casual','suit','mechanic','neighbor','shopper'].map(async name=>this.templates.set(name,await loader.loadAsync(`/models/${name}.glb`))));}
+ async load(){
+  const loader=new GLTFLoader(),textures=new T.TextureLoader();
+  await Promise.all(civilianNames.map(async name=>{
+   const [gltf,map,normal,mask1,mask2]=await Promise.all([loader.loadAsync(`/civilians/${name}.glb`),textures.loadAsync(`/civilians/${name}-dif.jpg`),textures.loadAsync(`/civilians/${name}-norm.jpg`),textures.loadAsync(`/civilians/${name}-mask01.jpg`),textures.loadAsync(`/civilians/${name}-mask02.jpg`)]);
+   // These are the original FBX atlases, not image data flipped by a GLB exporter.
+   for(const t of [map,normal,mask1,mask2]){t.flipY=true;t.anisotropy=Math.min(4,this.renderer.capabilities.getMaxAnisotropy());}
+   map.colorSpace=T.SRGBColorSpace;this.templates.set(name,gltf);this.surfaces.set(name,{map,normal,mask1,mask2});
+  }));
+ }
  private build(p:ActorPose):Rig{
-  const source=this.templates.get(p.model);if(!source)throw new Error(`Missing ${p.model}`);
+  const source=this.templates.get(p.model),surface=this.surfaces.get(p.model);if(!source||!surface)throw new Error(`Missing civilian ${p.model}`);
   const model=clone(source.scene),group=new T.Group();group.add(model);
-  const bounds=new T.Box3().setFromObject(model),size=bounds.getSize(new T.Vector3());
-  const scale=p.height/size.y;model.scale.multiplyScalar(scale);model.position.y-=bounds.min.y*scale;
-  model.traverse(o=>{if(o instanceof T.Mesh){o.frustumCulled=false;const materials=Array.isArray(o.material)?o.material:[o.material];
-   // Replace construction helmets with the named residents' own headwear.
-   if(['jun','mara'].includes(p.id)&&/head/i.test(o.name+' '+o.parent?.name)&&materials.every(m=>m.name==='Worker_Yellow'))o.visible=false;
-   o.material=materials.map(original=>{const m=original.clone() as T.MeshStandardMaterial;m.roughness=1;m.metalness=0;
-   const uniforms:Record<string,Record<string,string>>={
-    jun:{Worker_Yellow:'#253f40',Worker_Vest:'#d4c5a6',LightBrown:'#3e4843',Brown:'#363d39',Brown2:'#464941',Moustache:'#a4a394'},
-    mara:{Worker_Vest:'#337d7c',Worker_Yellow:'#c7a065',White:'#b8c0ac',Brown_02:'#324b51',Brown2:'#3c5357'},
-    ivo:{Suit:'#6b7d84',Tie:'#ae7858',White:'#b7b0a0',Grey:'#484f52'},
-    nell:{LimeGreen:'#8c435d',Brown:'#9b9389',Red:'#493a38',Gold:'#b68e58'},
-   };
-   const uniform=uniforms[p.id]?.[m.name];
-   if(m.color){if(/skin/i.test(m.name))m.color.set(['#e1bda0','#d3a88a','#edcbb0','#ad8168'][p.skin??0]);else if(uniform)m.color.set(uniform);else if(/purple|red_dark/i.test(m.name)&&p.coat)m.color.set(p.coat);else {
-    const hsl={h:0,s:0,l:0};m.color.getHSL(hsl);
-    m.color.setHSL(hsl.h,hsl.s*.45,Math.min(.58,hsl.l*.8));
-   }}
-   const fabric=!/skin|eye|hair|brow/i.test(m.name);
-   m.onBeforeCompile=shader=>{
-    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 clothPosition;').replace('#include <begin_vertex>','#include <begin_vertex>\nclothPosition=position;');
-    shader.fragmentShader=shader.fragmentShader.replace('#include <common>',`#include <common>
-     varying vec3 clothPosition;
-     float surfaceNoise(vec3 p){return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);}
-    `).replace('#include <color_fragment>',`#include <color_fragment>
-     vec3 surfaceCell=floor(clothPosition*${fabric?'85.':'115.'});
-     float wear=surfaceNoise(surfaceCell);
-     float fleck=surfaceNoise(floor(clothPosition*370.));
-     diffuseColor.rgb*=mix(${fabric?'.67,1.15':'.88,1.06'},wear);
-     diffuseColor.rgb*=mix(.92,1.05,fleck);
-     ${fabric?'float thread=step(.72,fract(clothPosition.y*210.));diffuseColor.rgb*=1.-thread*.045;':''}
-    `);
-   };
-   m.customProgramCacheKey=()=>fabric?'worn-fabric-v1':'weathered-skin-v1';
-   return m;});if(!Array.isArray((source.scene.getObjectByName(o.name) as T.Mesh)?.material))o.material=o.material[0];}});
-  const mixer=new T.AnimationMixer(model),actions:Record<string,T.AnimationAction>={};
-  for(const clip of source.animations){if(['Idle','Idle_Neutral','Walk','Interact','Wave'].includes(clip.name)){const a=mixer.clipAction(clip);a.enabled=true;a.play();a.setEffectiveWeight(0);actions[clip.name]=a;}}
-  const idle=actions.Idle_Neutral??actions.Idle;idle.setEffectiveWeight(1);idle.time=(p.x*.013)%idle.getClip().duration;mixer.update(0);
-  const props:T.Object3D[]=[];
-  this.dressResident(model,p.id);
-  if(p.id==='jun'){
-   const hand=model.getObjectByName('WristL')??model.getObjectByName('Wrist.L');
-   if(hand){const object=new T.Mesh(new T.SphereGeometry(.095,12,6,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xc6baa5,side:T.DoubleSide}));
-    object.rotation.x=Math.PI;hand.add(object);props.push(object);}
-  }
-  // Reduce the oversized cartoon head without changing the shared locomotion rig.
-  const head=model.getObjectByName('Head');
-  model.scale.x*=.92;model.scale.z*=.94;
-  this.scene.add(group);const rig={group,model,mixer,actions,current:'idle',face:p.face,props,height:p.height,head};this.actors.set(p.id,rig);return rig;
+  const bounds=new T.Box3().setFromObject(model),height=bounds.max.y-bounds.min.y;
+  const colors=wardrobe[p.id]??['#a5a69c','#787f83'];
+  model.traverse(o=>{if(o instanceof T.Mesh){o.frustumCulled=false;
+   const material=new T.MeshStandardMaterial({map:surface.map,normalMap:surface.normal,normalScale:new T.Vector2(.55,.55),roughness:.88,metalness:0});
+   material.onBeforeCompile=shader=>{
+    shader.uniforms.garmentOne={value:surface.mask1};shader.uniforms.garmentTwo={value:surface.mask2};shader.uniforms.tintOne={value:new T.Color(colors[0])};shader.uniforms.tintTwo={value:new T.Color(colors[1])};
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nuniform sampler2D garmentOne;uniform sampler2D garmentTwo;uniform vec3 tintOne;uniform vec3 tintTwo;')
+     .replace('#include <map_fragment>',`#include <map_fragment>
+      float clothOne=texture2D(garmentOne,vMapUv).r;
+      float clothTwo=texture2D(garmentTwo,vMapUv).r;
+      diffuseColor.rgb*=mix(vec3(1.),tintOne,clothOne*.8);
+      diffuseColor.rgb*=mix(vec3(1.),tintTwo,clothTwo*.7);
+     `);
+   };material.customProgramCacheKey=()=>`civilian-${p.id}`;o.material=material;
+  }});
+  dressCivilian(model,p.id,height);
+  model.scale.multiplyScalar(p.height/height);model.position.y-=bounds.min.y*(p.height/height);
+  const mixer=new T.AnimationMixer(model),walk=mixer.clipAction(source.animations.find(a=>a.name==='Walk')!),idle=mixer.clipAction(source.animations.find(a=>a.name==='Idle')!);
+  walk.play().setEffectiveWeight(0);idle.play().setEffectiveWeight(1);idle.time=(p.x*.031)%idle.getClip().duration;walk.time=(Math.abs(p.x)*.017)%walk.getClip().duration;mixer.update(0);
+  const rig={group,model,mixer,walk,idle,face:p.face,height:p.height,head:model.getObjectByName('head')};this.actors.set(p.id,rig);this.scene.add(group);return rig;
  }
  render(poses:ActorPose[],time:number,paused:boolean){
   const dt=paused?0:Math.min(.05,Math.max(0,time-this.lastTime));this.lastTime=time;
-  const ids=new Set(poses.map(p=>p.id));for(const [id,rig]of this.actors)rig.group.visible=ids.has(id);
-  for(const p of poses){const rig=this.actors.get(p.id)??this.build(p);rig.group.visible=true;rig.group.position.set(p.x-600,400-p.y,(p.y-600)*.2);rig.group.scale.setScalar(p.height/rig.height);
-   let turn=p.face-rig.face;turn=Math.atan2(Math.sin(turn),Math.cos(turn));rig.face+=turn*(1-Math.exp(-dt*8));rig.group.rotation.y=rig.face;
-   const moving=p.activity==='walk'&&Math.hypot(p.vx,p.vy)>.5;
-   const busy=['serve','repair','shop'].includes(p.activity),greeting=p.activity==='wave'||p.activity==='talk'&&Math.sin(time*.47+p.x)>.9;
-   const target=moving?'Walk':busy?'Interact':greeting?'Wave':(rig.actions.Idle_Neutral?'Idle_Neutral':'Idle');
-   const speed=Math.hypot(p.vx,p.vy*1.6);const blend=1-Math.exp(-dt*10);
-   for(const [name,action]of Object.entries(rig.actions)){const weight=action.getEffectiveWeight();action.setEffectiveWeight(T.MathUtils.lerp(weight,name===target?1:0,blend));
-    action.timeScale=name==='Walk'?T.MathUtils.clamp(speed/(p.height*.48),.4,1.7):name==='Interact'?.55:1;
-   }
-   // Mixers keep advancing through idle even when spatial velocity is zero.
-   // Stopping therefore settles the skeleton instead of freezing a gait frame.
-   rig.mixer.update(dt);rig.head?.scale.setScalar(.84);for(const object of rig.props)object.visible=p.id==='jun'||p.activity==='carry'||!!p.carrying;
+  const ids=new Set(poses.map(p=>p.id));for(const [id,r]of this.actors)r.group.visible=ids.has(id);
+  for(const p of poses){const r=this.actors.get(p.id)??this.build(p);r.group.visible=true;r.group.position.set(p.x-600,400-p.y,(p.y-600)*.2);r.group.scale.setScalar(p.height/r.height);
+   const turn=Math.atan2(Math.sin(p.face-r.face),Math.cos(p.face-r.face));r.face+=turn*(1-Math.exp(-dt*7));r.group.rotation.y=r.face;
+   const speed=Math.hypot(p.vx,p.vy*1.6),moving=p.activity==='walk'&&speed>.5;
+   const weight=T.MathUtils.lerp(r.walk.getEffectiveWeight(),moving?1:0,1-Math.exp(-dt*9));r.walk.setEffectiveWeight(weight);r.idle.setEffectiveWeight(1-weight);
+   r.walk.timeScale=T.MathUtils.clamp(speed/(p.height*.53),.35,1.6);r.idle.timeScale=.72+(p.x%7)*.035;r.mixer.update(dt);
+   poseCivilian(r.model,p.id,p.activity,time);
+   if(['talk','serve','repair','shop'].includes(p.activity)&&r.head){r.head.rotateY(Math.sin(time*.6+p.x)*.06);r.head.rotateX(Math.sin(time*.9)*.025);}
   }
   for(const p of this.animatedProps){if(p.kind==='cloth'){const mesh=p.object as T.Mesh<T.PlaneGeometry>,positions=mesh.geometry.attributes.position;
-    for(let i=0;i<positions.count;i++){const y=positions.getY(i);positions.setZ(i,Math.sin(time*1.25+positions.getX(i)*.05+p.seed)*(12-y)/24*3.5);}positions.needsUpdate=true;mesh.geometry.computeVertexNormals();}
+   for(let i=0;i<positions.count;i++){const y=positions.getY(i);positions.setZ(i,Math.sin(time*1.25+positions.getX(i)*.05+p.seed)*(12-y)/24*3.5);}positions.needsUpdate=true;mesh.geometry.computeVertexNormals();}
    else if(p.kind==='lantern')p.object.rotation.z=Math.sin(time*.7+p.seed)*.025;
    else if(p.kind==='fan')p.object.rotation.z=time*(p.seed%2?2.3:-1.8);
   }
-  this.renderer.setRenderTarget(this.target);this.renderer.render(this.scene,this.camera);
-  this.renderer.setRenderTarget(null);this.renderer.render(this.finishScene,this.finishCamera);
-  if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(1200*800*4);this.renderer.readRenderTargetPixels(this.target,0,0,1200,800,pixels);let scenePixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])scenePixels++;const gl=this.renderer.getContext();gl.readPixels(0,0,1200,800,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let outputPixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])outputPixels++;console.info('Character render diagnostic '+JSON.stringify({scenePixels,outputPixels}));}
- }
- private dressResident(model:T.Object3D,id:string){
-  const chest=model.getObjectByName('Chest'),head=model.getObjectByName('Head');
-  const cloth=(color:string)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});
-  const attach=(bone:T.Object3D|undefined,geometry:T.BufferGeometry,color:string,x:number,y:number,z:number)=>{const mesh=new T.Mesh(geometry,cloth(color));mesh.position.set(x,y,z);bone?.add(mesh);return mesh;};
-  if(id==='jun'){
-   attach(chest,new T.PlaneGeometry(.37,.64,2,4),'#d8c8a5',0,-.22,.175);
-   attach(chest,new T.PlaneGeometry(.15,.13),'#ad9c7b',.03,-.25,.182);
-   for(const x of [-.12,.12])attach(chest,new T.PlaneGeometry(.026,.24),'#d8c8a5',x,.09,.156);
-   const cap=attach(head,new T.SphereGeometry(.145,12,6,0,Math.PI*2,0,Math.PI/2),'#263f40',0,.24,0);cap.scale.y=.46;
-  }
-  if(id==='mara'){
-   const band=attach(head,new T.TorusGeometry(.13,.019,5,18),'#c29b62',0,.18,0);band.rotation.x=Math.PI/2;
-   attach(chest,new T.PlaneGeometry(.08,.045),'#e6c590',.11,.025,.14);
-  }
-  if(id==='ivo')for(const x of [-.12,.12])attach(chest,new T.PlaneGeometry(.022,.28),'#c7c7b2',x,-.025,.16);
-  if(id==='nell'){
-   const scarf=attach(chest,new T.TorusGeometry(.105,.032,5,14),'#bd9670',0,.17,0);scarf.rotation.x=Math.PI/2;
-   attach(chest,new T.PlaneGeometry(.065,.3),'#bd9670',.07,-.015,.16);
-  }
+  this.renderer.render(this.scene,this.camera);
+  if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(1800*1200*4),gl=this.renderer.getContext();gl.readPixels(0,0,1800,1200,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let visible=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])visible++;console.info('Scanned civilian render '+JSON.stringify({models:this.templates.size,actors:poses.length,visiblePixels:visible}));}
  }
  private makeProps(){
   const material=(color:number)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});
@@ -151,7 +83,6 @@ export class PeopleScene{
   for(let i=0;i<6;i++){const cloth=new T.Mesh(new T.PlaneGeometry(19,28,6,8),material([0x806940,0x44534b,0x624839][i%3]));cloth.position.set(75+i*30,183+Math.sin(i)*5,-40);cloth.rotation.y=.1;this.scene.add(cloth);this.animatedProps.push({object:cloth,kind:'cloth',seed:i*1.3});}
   for(const [x,y]of [[99,396],[221,397],[379,395]]){const group=new T.Group();group.position.set(x-600,400-y,-25);const lantern=new T.Mesh(new T.CylinderGeometry(6,7,19,8),new T.MeshStandardMaterial({color:0xc98135,emissive:0xc97d2a,emissiveIntensity:.6}));lantern.position.y=-8;group.add(lantern);this.scene.add(group);this.animatedProps.push({object:group,kind:'lantern',seed:x});}
  }
- destroy(){for(const rig of this.actors.values()){rig.mixer.stopAllAction();rig.mixer.uncacheRoot(rig.model);}this.scene.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});this.finishScene.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});this.finishMaterial.dispose();this.target.dispose();this.renderer.dispose();}
+ destroy(){for(const r of this.actors.values()){r.mixer.stopAllAction();r.mixer.uncacheRoot(r.model);}this.scene.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});for(const s of this.surfaces.values())for(const t of Object.values(s))t.dispose();this.renderer.dispose();}
 }
-
 

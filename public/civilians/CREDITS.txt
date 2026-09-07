@@ -1,0 +1,14 @@
+Civilian character scans: Renderpeople free model collection
+https://renderpeople.com/free-3d-people/
+
+Eric Rigged 001, Carla Rigged 001, Claudia Rigged 002,
+Nathan Animated 003 Walking, Manuel Animated 001 Dancing,
+Sophia Animated 003 Idling.
+
+These assets are licensed proprietary Renderpeople content, not CC0.
+Used and adapted as integrated characters in Life and Adventures of Swango.
+https://renderpeople.com/general-terms-and-conditions/
+
+Game adaptations: browser mesh conversion, texture size optimization,
+walking retargeting, neutral motion, civilian wardrobe colors and fitted costumes.
+The original source downloads are retained outside the published game.

@@ -1,0 +1,62 @@
+import * as T from 'three';
+export const civilianNames=['eric','carla','claudia','manuel','nathan','sophia'];
+export const wardrobe:Record<string,[string,string]>={
+ swango:['#b58c42','#5e6765'],jun:['#657578','#343f42'],mara:['#458382','#555f62'],
+ ivo:['#7a929a','#546e80'],nell:['#98526a','#747077'],commuter:['#73898a','#687177'],
+ student:['#899579','#696d76'],shopper:['#bdad8e','#757d8c'],delivery:['#778ba0','#677b84'],
+ 'friend-a':['#9b7c6b','#5d6d74'],'friend-b':['#c3b39d','#72797d'],'late-shift':['#969886','#686a72'],visitor:['#7c627a','#62666f'],
+};
+export function dressCivilian(model:T.Object3D,id:string,height:number){
+ model.userData.civilianHeight=height;
+ model.updateMatrixWorld(true);
+ const attach=(boneName:string,geometry:T.BufferGeometry,color:string,x:number,y:number,z:number)=>{
+  const bone=model.getObjectByName(boneName);if(!bone)return;
+  const mesh=new T.Mesh(geometry,new T.MeshStandardMaterial({color,roughness:.93,side:T.DoubleSide}));
+  // Costume anchors are authored in the scanned body's bind pose, then fitted to its bone.
+  const local=bone.matrixWorld.clone().invert().multiply(new T.Matrix4().makeTranslation(x,y,z));
+  local.decompose(mesh.position,mesh.quaternion,mesh.scale);bone.add(mesh);return mesh;
+ };
+ if(id==='jun'){
+  const apron=new T.PlaneGeometry(37,66,8,12),position=apron.attributes.position;
+  for(let i=0;i<position.count;i++){const x=position.getX(i),y=position.getY(i);position.setZ(i,Math.sin(x*.28)*.65-Math.abs(x)*.08);position.setX(i,x*(1-y/220));}apron.computeVertexNormals();
+  attach('spine_02',apron,'#c8bda3',0,height*.57,13);
+  attach('spine_02',new T.PlaneGeometry(13,10),'#aa9e82',4,height*.56,14);
+  for(const x of [-11,11])attach('spine_03',new T.PlaneGeometry(2.1,24),'#c8bda3',x,height*.78,12);
+  const cap=attach('head',new T.SphereGeometry(10,20,10,0,Math.PI*2,0,Math.PI/2),'#344b4b',0,height-2,0);if(cap)cap.scale.y*=.6;
+  const bowl=new T.Group();bowl.name='RamenBowl';bowl.position.set(14,height*.67,29);
+  const ceramic=new T.Mesh(new T.SphereGeometry(9,24,12,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xd5ccb3,roughness:.45,side:T.DoubleSide}));ceramic.rotation.x=Math.PI;bowl.add(ceramic);
+  const broth=new T.Mesh(new T.CircleGeometry(8,24),new T.MeshStandardMaterial({color:0xac7b35,roughness:.38}));broth.rotation.x=-Math.PI/2;broth.position.y=-1;bowl.add(broth);model.add(bowl);
+ }
+ if(id==='mara')attach('spine_03',new T.PlaneGeometry(7,3.8),'#d6c19b',-11,height*.76,13);
+ if(id==='ivo')for(const x of [-12,12])attach('spine_03',new T.PlaneGeometry(2,28),'#bdbea8',x,height*.74,14);
+ if(id==='nell'){
+  const scarf=new T.TorusGeometry(8,2.4,8,24);scarf.rotateX(Math.PI/2);
+  attach('neck',scarf,'#b89976',0,height*.855,0);
+  attach('spine_03',new T.PlaneGeometry(5.5,27),'#b89976',8,height*.75,13);
+ }
+ if(id==='swango'){
+  attach('spine_02',new T.BoxGeometry(17,22,7),'#6e624e',-20,height*.52,4);
+  const strap=new T.PlaneGeometry(2.6,height*.3);strap.rotateZ(-.38);attach('spine_03',strap,'#655b47',0,height*.72,14);
+ }
+}
+// Position hands using the full scanned skeleton; the geometry and clothing
+// follow the joints, with no sprite warping or frozen interaction frame.
+export function poseCivilian(model:T.Object3D,id:string,activity:string,time:number){
+ const h=model.userData.civilianHeight as number;
+ if(id==='jun'){
+  reach(model,'l',new T.Vector3(18,h*.67-4,28));
+  reach(model,'r',new T.Vector3(7+Math.sin(time*1.15)*3,h*.72,29+Math.cos(time*1.15)*3));
+ }else if(activity==='repair')reach(model,'r',new T.Vector3(-13,h*.63+Math.sin(time*1.2)*2,32));
+ else if(activity==='talk')reach(model,'r',new T.Vector3(-22,h*.60+Math.sin(time*.8)*3,17));
+}
+function reach(model:T.Object3D,side:string,target:T.Vector3){
+ const upper=model.getObjectByName('upperarm_'+side),lower=model.getObjectByName('lowerarm_'+side),hand=model.getObjectByName('hand_'+side);if(!upper||!lower||!hand)return;
+ model.updateWorldMatrix(true,true);target=model.localToWorld(target);
+ const a=upper.getWorldPosition(new T.Vector3()),b=lower.getWorldPosition(new T.Vector3()),c=hand.getWorldPosition(new T.Vector3());
+ const l1=a.distanceTo(b),l2=b.distanceTo(c),direction=target.clone().sub(a),distance=Math.min(direction.length(),(l1+l2)*.98);direction.normalize();
+ const pole=new T.Vector3(side==='l'?1:-1,0,0).transformDirection(model.matrixWorld);pole.addScaledVector(direction,-pole.dot(direction)).normalize();
+ const cosine=T.MathUtils.clamp((l1*l1+distance*distance-l2*l2)/(2*l1*distance),-1,1);
+ const elbow=a.clone().addScaledVector(direction,l1*cosine).addScaledVector(pole,l1*Math.sqrt(1-cosine*cosine));
+ const aim=(bone:T.Object3D,child:T.Object3D,point:T.Vector3)=>{const start=bone.getWorldPosition(new T.Vector3()),from=child.getWorldPosition(new T.Vector3()).sub(start).normalize(),to=point.clone().sub(start).normalize();const q=new T.Quaternion().setFromUnitVectors(from,to).multiply(bone.getWorldQuaternion(new T.Quaternion()));bone.quaternion.copy(bone.parent!.getWorldQuaternion(new T.Quaternion()).invert().multiply(q));bone.updateWorldMatrix(false,true);};
+ aim(upper,lower,elbow);aim(lower,hand,target);
+}
