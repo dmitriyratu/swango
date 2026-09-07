@@ -1,4 +1,6 @@
-import { BOUNDS, movePoint, avoidPeople, closest, nextIndex, type Point } from './mechanics';
+import { BOUNDS, closest, nextIndex, type Point } from './mechanics';
+import { PeopleScene, type ActorPose } from './people-scene';
+import { streetCast, updateCitizen, movePlayer } from './street-life';
 export type Choice={text:string;reply:string};
 type Exchange={line:string;choices?:Choice[]};
 export type Resident=Point&{id:string;name:string;role:string;sprite:number;lines:Exchange[];asides:string[]};
@@ -33,18 +35,11 @@ type Callbacks={nearby:(r:Resident|null)=>void;conversation:(c:Conversation|null
 export class Game {
   private ctx:CanvasRenderingContext2D;
   private background:HTMLImageElement|null=null;
-  private sprites:HTMLCanvasElement[]=[];
-  private heroWalk:HTMLCanvasElement[]=[];
-  private crowdWalk:HTMLCanvasElement[][]=[];
-  private residentIdles:HTMLCanvasElement[][]=[];
+  private people:PeopleScene|null=null;
+  private citizens=streetCast();
+  private velocity={x:0,y:0};
+  private heading=0;
   private puff:HTMLCanvasElement|null=null;
-  private travel=0;
-  private walkers=[
-    {x:120,y:656,direction:1,speed:49,travel:17,variant:0,scale:.94},
-    {x:875,y:656,direction:1,speed:43,travel:83,variant:1,scale:.89},
-    {x:1110,y:738,direction:-1,speed:57,travel:41,variant:0,scale:1.02},
-    {x:380,y:738,direction:-1,speed:46,travel:109,variant:1,scale:.95},
-  ].map(w=>({...w,moving:false}));
   private frame=0;private destroyed=false;private last=0;private time=0;
   private keys=new Set<string>();private target:Point|null=null;private autoTalk:string|null=null;
   private player={x:594,y:683};private facing=1;private moving=false;
@@ -57,55 +52,12 @@ export class Game {
     window.addEventListener('keydown',this.keydown);window.addEventListener('keyup',this.keyup);window.addEventListener('blur',this.blur);canvas.addEventListener('pointerdown',this.pointer);
   }
   async load(){
-    const get=(src:string)=>new Promise<HTMLImageElement>((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src=src;});
-    const [bg,sheet]=await Promise.all([get('/night-alley.png'),get('/residents-sheet.png')]);
-    if(this.destroyed)return;this.background=bg;
-    // Chroma key is applied when loading the sprite sheet into the game renderer.
-    for(let i=0;i<6;i++){
-      const c=document.createElement('canvas');c.width=256;c.height=1024;const x=c.getContext('2d')!;x.drawImage(sheet,i*256,0,256,1024,0,0,256,1024);
-      const data=x.getImageData(0,0,256,1024);let left=256,right=0,top=1024,bottom=0;
-      for(let y=0;y<1024;y++)for(let px=0;px<256;px++){
-        const k=(y*256+px)*4,r=data.data[k],g=data.data[k+1],b=data.data[k+2];
-        if(r>g*1.5&&b>g*1.5&&r>120&&b>100)data.data[k+3]=0;
-        else{left=Math.min(left,px);right=Math.max(right,px);top=Math.min(top,y);bottom=Math.max(bottom,y);}
-      }
-      x.putImageData(data,0,0);const trimmed=document.createElement('canvas');trimmed.width=right-left+1;trimmed.height=bottom-top+1;trimmed.getContext('2d')!.drawImage(c,left,top,trimmed.width,trimmed.height,0,0,trimmed.width,trimmed.height);this.sprites.push(trimmed);
-    }
-    this.frame=requestAnimationFrame(this.tick);
-    // Animation atlases are separate so each person can move at an independent pace.
-    const atlases=await Promise.allSettled([get('/swango-walk.png'),get('/crowd-walk.png'),get('/resident-idles.png')]);
+    const background=new Image();
+    await new Promise<void>((resolve,reject)=>{background.onload=()=>resolve();background.onerror=()=>reject(new Error('Alley artwork unavailable'));background.src='/night-alley.png';});
     if(this.destroyed)return;
-    if(atlases[0].status==='fulfilled')this.heroWalk=this.atlas(atlases[0].value,4,2).flat();
-    if(atlases[1].status==='fulfilled')this.crowdWalk=this.atlas(atlases[1].value,4,2);
-    if(atlases[2].status==='fulfilled')this.residentIdles=this.atlas(atlases[2].value,4,4);
-  }
-  private atlas(image:HTMLImageElement,columns:number,rows:number){
-    const result:HTMLCanvasElement[][]=[],cw=image.width/columns,ch=image.height/rows;
-    for(let row=0;row<rows;row++){
-      const frames:HTMLCanvasElement[]=[];
-      for(let col=0;col<columns;col++){
-        const rowTop=rows===4?[0,255,514,763][row]:row*ch,rowBottom=rows===4?[255,514,763,1024][row]:(row+1)*ch,cellHeight=rowBottom-rowTop;
-        const frame=document.createElement('canvas');frame.width=cw;frame.height=cellHeight;const c=frame.getContext('2d')!;
-        c.drawImage(image,col*cw,rowTop,cw,cellHeight,0,0,cw,cellHeight);const d=c.getImageData(0,0,cw,cellHeight);
-        let left=cw,right=-1,top=cellHeight,bottom=-1;
-        for(let y=0;y<cellHeight;y++)for(let x=0;x<cw;x++){const k=(y*cw+x)*4,r=d.data[k],g=d.data[k+1],b=d.data[k+2];if(r>g*1.5&&b>g*1.5&&r>120&&b>100)d.data[k+3]=0;else{left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}}
-        c.putImageData(d,0,0);const trim=document.createElement('canvas');trim.width=Math.max(1,right-left+1);trim.height=Math.max(1,bottom-top+1);trim.getContext('2d')!.drawImage(frame,left,top,trim.width,trim.height,0,0,trim.width,trim.height);frames.push(trim);
-      }
-      // Use one scale for the entire sequence and align the torso, not the
-      // changing silhouette of swinging arms and feet. This prevents shrinking
-      // bodies and sideways snapping at every frame change.
-      const maxHeight=Math.max(...frames.map(f=>f.height)),scale=300/maxHeight;
-      result.push(frames.map(frame=>{
-        const fc=frame.getContext('2d')!,pixels=fc.getImageData(0,0,frame.width,frame.height).data;
-        let sum=0,count=0;
-        for(let y=Math.floor(frame.height*.23);y<frame.height*.48;y++)for(let x=0;x<frame.width;x++)if(pixels[(y*frame.width+x)*4+3]>128){sum+=x;count++;}
-        const anchor=count?sum/count:frame.width/2;
-        const aligned=document.createElement('canvas');aligned.width=240;aligned.height=320;
-        const ac=aligned.getContext('2d')!;ac.imageSmoothingEnabled=false;
-        ac.drawImage(frame,120-anchor*scale,320-frame.height*scale,frame.width*scale,frame.height*scale);
-        return aligned;
-      }));
-    }return result;
+    this.background=background;this.people=new PeopleScene();await this.people.load();
+    if(this.destroyed){this.people.destroy();return;}
+    this.frame=requestAnimationFrame(this.tick);
   }
   start(){this.playing=true;this.paused=false;this.keys.clear();this.target=null;this.nextAside=this.time+7;}
   setPaused(value:boolean){this.paused=value;this.keys.clear();this.target=null;}
@@ -140,43 +92,22 @@ export class Game {
     if(!this.paused){this.time+=dt;this.update(dt);}this.draw();this.frame=requestAnimationFrame(this.tick);
   };
   private update(dt:number){
-    this.moving=false;
-    // Foot paths stay on the two broad strips of paving. Residents remain at
-    // their own places; no clamped patrol can run a walking loop in a doorway.
-    for(const w of this.walkers){
-      const ahead=(p:Point)=>Math.abs(p.y-w.y)<24&&(p.x-w.x)*w.direction>0&&(p.x-w.x)*w.direction<65;
-      const blocked=(this.playing&&ahead(this.player))||this.walkers.some(other=>other!==w&&ahead(other));
-      const distance=this.reduced||blocked?0:w.speed*dt;
-      w.moving=distance>0;w.x+=w.direction*distance;w.travel+=distance;
-      if(w.x>1310)w.x=-110;if(w.x< -110)w.x=1310;
-    }
+    this.moving=false;this.velocity={x:0,y:0};
+    if(!this.reduced)for(const citizen of this.citizens)updateCitizen(citizen,dt,this.citizens.filter(other=>other!==citizen),this.playing?this.player:null);
     if(!this.playing||this.conversation)return;
     let dx=Number(this.keys.has('right'))-Number(this.keys.has('left')),dy=Number(this.keys.has('down'))-Number(this.keys.has('up'));
-    if(this.target&&!dx&&!dy){const x=this.target.x-this.player.x,y=this.target.y-this.player.y;if(Math.hypot(x,y)<4){this.target=null;if(this.autoTalk){this.autoTalk=null;this.interact();}}else{dx=x/112;dy=y/58;}}
-    if(dx||dy){const p=avoidPeople(this.player,movePoint(this.player,dx,dy,dt),[...RESIDENTS,...this.walkers]),distance=Math.hypot(p.x-this.player.x,(p.y-this.player.y)*1.6);this.moving=distance>.01;this.travel+=distance;if(dx)this.facing=dx<0?-1:1;this.player=p;}
+    if(this.target&&!dx&&!dy){const x=this.target.x-this.player.x,y=this.target.y-this.player.y;if(Math.hypot(x,y)<4){this.target=null;if(this.autoTalk){this.autoTalk=null;this.interact();}}else{dx=x/106;dy=y/59;}}
+    if(dx||dy){const next=movePlayer(this.player,dx,dy,dt,[...RESIDENTS,...this.citizens]);this.velocity={x:(next.x-this.player.x)/Math.max(dt,.001),y:(next.y-this.player.y)/Math.max(dt,.001)};this.moving=Math.hypot(this.velocity.x,this.velocity.y)>.5;if(this.moving)this.heading=Math.atan2(this.velocity.x,this.velocity.y*1.6);this.player=next;}
     const n=closest(this.player,RESIDENTS);if(n?.id!==this.near?.id){this.near=n;this.cb.nearby(n);}
     if(this.clearAside&&this.time>this.clearAside){this.cb.aside(null);this.clearAside=0;}
     if(this.time>this.nextAside){const n=RESIDENTS[Math.floor(Math.random()*RESIDENTS.length)];this.cb.aside({name:n.name,line:n.asides[Math.floor(Math.random()*n.asides.length)]});this.clearAside=this.time+6;this.nextAside=this.time+16+Math.random()*6;}
   }
-  private person(index:number,x:number,y:number,walk=false,flip=1,hero=false,crowd=-1,offset=0,size=1){
-    const c=this.ctx,clock=this.reduced?0:this.time;
-    const sequence=hero?this.heroWalk:crowd>=0?this.crowdWalk[crowd]:this.residentIdles[index-1];
-    const animated=sequence&&sequence.length>0;
-    const depth=(.83+(y-600)/450)*size;
-    const stride=139*depth*(crowd===1?.64:.74);
-    const idleSequence=[0,1,2,3,2,1,0];
-    const gestureTime=(clock+index*3.17)%(9+index*1.8);
-    const fi=hero||crowd>=0?(walk?Math.floor(offset/stride*(sequence?.length??1))%Math.max(1,sequence?.length??1):0):gestureTime<1.75?idleSequence[Math.floor(gestureTime*4)]:0;
-    const im=animated?sequence[fi%sequence.length]:this.sprites[index];if(!im)return;
-    const h=139*depth*(animated?320/300:1),w=im.width/im.height*h;
-    const shadowWidth=21*depth;
-    c.fillStyle='#020c0b85';c.beginPath();c.ellipse(x,y+2,shadowWidth,4*depth,0,0,Math.PI*2);c.fill();
-    if(hero&&this.playing){c.strokeStyle='#dfb96a55';c.lineWidth=1;c.beginPath();c.ellipse(x,y+3,shadowWidth,5,0,0,Math.PI*2);c.stroke();}
-    c.save();c.translate(x,y);c.scale(flip,1);
-    c.save();c.scale(1,-.20);c.globalAlpha=.07;c.drawImage(im,-w/2,-h,w,h);c.restore();
-    c.drawImage(im,-w/2,-h,w,h);
-    c.restore();
-    if(hero&&this.playing&&!this.conversation){c.font='10px monospace';c.textAlign='center';c.fillStyle='#ecd49c';c.fillText('SWANGO',x,y-h-15);}
+  private poses():ActorPose[]{
+    const models=['worker','mechanic','casual','neighbor'];
+    const poses:ActorPose[]=RESIDENTS.map((n,i)=>({id:n.id,model:models[i],x:n.x,y:n.y,height:[125,122,140,122][i],vx:0,vy:0,face:this.conversation?.resident.id===n.id?Math.atan2(this.player.x-n.x,(this.player.y-n.y)*1.6):[0,-.5,.25,-.3][i],activity:this.conversation?.resident.id===n.id?'talk':i===0?'serve':i===1?'repair':'idle',skin:i%3}));
+    for(const c of this.citizens)poses.push({...c,height:c.height*(.88+(c.y-631)/650),carrying:c.id==='delivery'&&c.stop>=2});
+    poses.push({id:'swango',model:'hoodie',...this.player,height:137*(.9+(this.player.y-600)/650),vx:this.velocity.x,vy:this.velocity.y,face:this.heading,activity:this.moving?'walk':this.conversation?'talk':'idle',skin:1,coat:'#b08839'});
+    return poses;
   }
   private draw(){
     const c=this.ctx,t=this.reduced?0:this.time;c.imageSmoothingEnabled=false;
@@ -189,10 +120,10 @@ export class Game {
     glow(939,706,120,`rgba(39,145,148,${neon*.5})`);
     c.restore();
     this.steam(177,493,90,t,1);this.steam(1035,577,60,t,2);
-    const people=RESIDENTS.map(n=>({index:n.sprite,x:n.x,y:n.y,walk:false,flip:n.id==='nell'?-1:1,hero:false,crowd:-1,offset:0,size:1}));
-    for(const w of this.walkers)people.push({index:5,x:w.x,y:w.y,walk:w.moving,flip:w.direction,hero:false,crowd:w.variant,offset:w.travel,size:w.scale});
-    people.push({index:0,x:this.player.x,y:this.player.y,walk:this.moving,flip:this.facing,hero:true,crowd:-1,offset:this.travel,size:1});
-    people.sort((a,b)=>a.y-b.y).forEach(p=>this.person(p.index,p.x,p.y,p.walk,p.flip,p.hero,p.crowd,p.offset,p.size));
+    const poses=this.poses();
+    for(const p of poses){c.fillStyle='#02121065';c.beginPath();c.ellipse(p.x,p.y+2,p.height*.15,4,0,0,Math.PI*2);c.fill();}
+    if(this.people){this.people.render(poses,t,this.paused||this.reduced);c.drawImage(this.people.canvas,0,0,1200,800);}
+    if(this.playing){c.strokeStyle='#d0b56d66';c.beginPath();c.ellipse(this.player.x,this.player.y+3,20,5,0,0,Math.PI*2);c.stroke();c.font='10px monospace';c.fillStyle='#e2ce98';c.textAlign='center';c.fillText('SWANGO',this.player.x,this.player.y-154);}
     c.save();c.lineWidth=1;
     for(let i=0;i<68;i++){const x=(i*139.31+t*8)%1200,y=(i*83.61+t*(230+(i%4)*20))%800;c.strokeStyle=`rgba(153,191,175,${.04+(i%3)*.015})`;c.beginPath();c.moveTo(x,y);c.lineTo(x-.6,y+6);c.stroke();}
     for(let i=0;i<12;i++){const x=(i*97+35)%1200,y=625+(i*43)%140,f=(t*.55+i*.37)%1;c.strokeStyle=`rgba(158,200,172,${Math.sin(f*Math.PI)*.075})`;c.beginPath();c.ellipse(x,y,1+f*7,.5+f*1.5,0,0,Math.PI*2);c.stroke();}
@@ -206,5 +137,5 @@ export class Game {
     for(let i=0;i<19;i++){const f=(t*.065+i/19+seed*.24)%1,s=12+f*37,drift=Math.sin(seed+f*2)*9+f*17;c.globalAlpha=Math.sin(f*Math.PI)*.075;c.drawImage(this.puff,x+drift-s/2,y-f*height-s/2,s,s*1.4);}
     c.restore();
   }
-  destroy(){this.destroyed=true;cancelAnimationFrame(this.frame);window.removeEventListener('keydown',this.keydown);window.removeEventListener('keyup',this.keyup);window.removeEventListener('blur',this.blur);this.canvas.removeEventListener('pointerdown',this.pointer);}
+  destroy(){this.destroyed=true;this.people?.destroy();cancelAnimationFrame(this.frame);window.removeEventListener('keydown',this.keydown);window.removeEventListener('keyup',this.keyup);window.removeEventListener('blur',this.blur);this.canvas.removeEventListener('pointerdown',this.pointer);}
 }

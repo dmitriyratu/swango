@@ -1,0 +1,5 @@
+Character models: Quaternius, Ultimate Modular Men (2022) and Ultimate Modular Women (2022).
+License: CC0 1.0 Universal / Public Domain Dedication.
+Official source: https://quaternius.com/packs/ultimatemodularcharacters.html
+Public distribution: https://github.com/agentkaerf/FreeModels
+Game copies retain Idle, Idle_Neutral, Walk, Interact and Wave clips and use compact GLB packaging.
