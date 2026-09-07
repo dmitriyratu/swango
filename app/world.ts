@@ -1,4 +1,4 @@
-import { BOUNDS, movePoint, closest, nextIndex, type Point } from './mechanics';
+import { BOUNDS, movePoint, avoidPeople, closest, nextIndex, type Point } from './mechanics';
 export type Choice={text:string;reply:string};
 type Exchange={line:string;choices?:Choice[]};
 export type Resident=Point&{id:string;name:string;role:string;sprite:number;lines:Exchange[];asides:string[]};
@@ -38,7 +38,13 @@ export class Game {
   private crowdWalk:HTMLCanvasElement[][]=[];
   private residentIdles:HTMLCanvasElement[][]=[];
   private puff:HTMLCanvasElement|null=null;
-  private residentMotion=new Map<string,{walk:boolean;flip:number}>();
+  private travel=0;
+  private walkers=[
+    {x:120,y:656,direction:1,speed:49,travel:17,variant:0,scale:.94},
+    {x:875,y:656,direction:1,speed:43,travel:83,variant:1,scale:.89},
+    {x:1110,y:738,direction:-1,speed:57,travel:41,variant:0,scale:1.02},
+    {x:380,y:738,direction:-1,speed:46,travel:109,variant:1,scale:.95},
+  ].map(w=>({...w,moving:false}));
   private frame=0;private destroyed=false;private last=0;private time=0;
   private keys=new Set<string>();private target:Point|null=null;private autoTalk:string|null=null;
   private player={x:594,y:683};private facing=1;private moving=false;
@@ -85,7 +91,20 @@ export class Game {
         for(let y=0;y<cellHeight;y++)for(let x=0;x<cw;x++){const k=(y*cw+x)*4,r=d.data[k],g=d.data[k+1],b=d.data[k+2];if(r>g*1.5&&b>g*1.5&&r>120&&b>100)d.data[k+3]=0;else{left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}}
         c.putImageData(d,0,0);const trim=document.createElement('canvas');trim.width=Math.max(1,right-left+1);trim.height=Math.max(1,bottom-top+1);trim.getContext('2d')!.drawImage(frame,left,top,trim.width,trim.height,0,0,trim.width,trim.height);frames.push(trim);
       }
-      result.push(frames);
+      // Use one scale for the entire sequence and align the torso, not the
+      // changing silhouette of swinging arms and feet. This prevents shrinking
+      // bodies and sideways snapping at every frame change.
+      const maxHeight=Math.max(...frames.map(f=>f.height)),scale=300/maxHeight;
+      result.push(frames.map(frame=>{
+        const fc=frame.getContext('2d')!,pixels=fc.getImageData(0,0,frame.width,frame.height).data;
+        let sum=0,count=0;
+        for(let y=Math.floor(frame.height*.23);y<frame.height*.48;y++)for(let x=0;x<frame.width;x++)if(pixels[(y*frame.width+x)*4+3]>128){sum+=x;count++;}
+        const anchor=count?sum/count:frame.width/2;
+        const aligned=document.createElement('canvas');aligned.width=240;aligned.height=320;
+        const ac=aligned.getContext('2d')!;ac.imageSmoothingEnabled=false;
+        ac.drawImage(frame,120-anchor*scale,320-frame.height*scale,frame.width*scale,frame.height*scale);
+        return aligned;
+      }));
     }return result;
   }
   start(){this.playing=true;this.paused=false;this.keys.clear();this.target=null;this.nextAside=this.time+7;}
@@ -122,42 +141,40 @@ export class Game {
   };
   private update(dt:number){
     this.moving=false;
-    for(const [i,n] of RESIDENTS.entries()){
-      const busy=this.conversation?.resident.id===n.id||Math.hypot(this.player.x-n.x,this.player.y-n.y)<112;
-      const phase=(this.time+i*13)%40,walk=!busy&&(i===2||i===3)&&phase<12;
-      const direction=Math.floor((this.time+i*13)/40)%2===0?1:-1;
-      if(walk){n.x=Math.max(i===2?340:755,Math.min(i===2?510:920,n.x+direction*dt*12));}
-      this.residentMotion.set(n.id,{walk,flip:busy?(this.player.x<n.x?-1:1):direction});
+    // Foot paths stay on the two broad strips of paving. Residents remain at
+    // their own places; no clamped patrol can run a walking loop in a doorway.
+    for(const w of this.walkers){
+      const ahead=(p:Point)=>Math.abs(p.y-w.y)<24&&(p.x-w.x)*w.direction>0&&(p.x-w.x)*w.direction<65;
+      const blocked=(this.playing&&ahead(this.player))||this.walkers.some(other=>other!==w&&ahead(other));
+      const distance=this.reduced||blocked?0:w.speed*dt;
+      w.moving=distance>0;w.x+=w.direction*distance;w.travel+=distance;
+      if(w.x>1310)w.x=-110;if(w.x< -110)w.x=1310;
     }
     if(!this.playing||this.conversation)return;
     let dx=Number(this.keys.has('right'))-Number(this.keys.has('left')),dy=Number(this.keys.has('down'))-Number(this.keys.has('up'));
-    if(this.target&&!dx&&!dy){const x=this.target.x-this.player.x,y=this.target.y-this.player.y;if(Math.hypot(x,y)<4){this.target=null;if(this.autoTalk){this.autoTalk=null;this.interact();}}else{dx=x/155;dy=y/82;}}
-    if(dx||dy){const p=movePoint(this.player,dx,dy,dt);this.moving=Math.hypot(p.x-this.player.x,p.y-this.player.y)>.01;if(dx)this.facing=dx<0?-1:1;this.player=p;}
+    if(this.target&&!dx&&!dy){const x=this.target.x-this.player.x,y=this.target.y-this.player.y;if(Math.hypot(x,y)<4){this.target=null;if(this.autoTalk){this.autoTalk=null;this.interact();}}else{dx=x/112;dy=y/58;}}
+    if(dx||dy){const p=avoidPeople(this.player,movePoint(this.player,dx,dy,dt),[...RESIDENTS,...this.walkers]),distance=Math.hypot(p.x-this.player.x,(p.y-this.player.y)*1.6);this.moving=distance>.01;this.travel+=distance;if(dx)this.facing=dx<0?-1:1;this.player=p;}
     const n=closest(this.player,RESIDENTS);if(n?.id!==this.near?.id){this.near=n;this.cb.nearby(n);}
     if(this.clearAside&&this.time>this.clearAside){this.cb.aside(null);this.clearAside=0;}
     if(this.time>this.nextAside){const n=RESIDENTS[Math.floor(Math.random()*RESIDENTS.length)];this.cb.aside({name:n.name,line:n.asides[Math.floor(Math.random()*n.asides.length)]});this.clearAside=this.time+6;this.nextAside=this.time+16+Math.random()*6;}
   }
-  private person(index:number,x:number,y:number,walk=false,flip=1,hero=false,crowd=-1,offset=0){
+  private person(index:number,x:number,y:number,walk=false,flip=1,hero=false,crowd=-1,offset=0,size=1){
     const c=this.ctx,clock=this.reduced?0:this.time;
-    const sequence=hero&&walk?this.heroWalk:crowd>=0?this.crowdWalk[crowd]:!hero?this.residentIdles[index-1]:undefined;
+    const sequence=hero?this.heroWalk:crowd>=0?this.crowdWalk[crowd]:this.residentIdles[index-1];
     const animated=sequence&&sequence.length>0;
-    const idleSequence=[0,0,0,0,1,2,3,3,2,1,0,0];
-    const fi=walk?Math.floor(clock*8+offset)%Math.max(1,sequence?.length??1):idleSequence[Math.floor(clock*2.5+offset)%idleSequence.length];
+    const depth=(.83+(y-600)/450)*size;
+    const stride=139*depth*(crowd===1?.64:.74);
+    const idleSequence=[0,1,2,3,2,1,0];
+    const gestureTime=(clock+index*3.17)%(9+index*1.8);
+    const fi=hero||crowd>=0?(walk?Math.floor(offset/stride*(sequence?.length??1))%Math.max(1,sequence?.length??1):0):gestureTime<1.75?idleSequence[Math.floor(gestureTime*4)]:0;
     const im=animated?sequence[fi%sequence.length]:this.sprites[index];if(!im)return;
-    const depth=.83+(y-600)/450,h=139*depth,w=im.width/im.height*h;
-    const phase=clock*10+offset,bob=walk?Math.abs(Math.sin(phase))*2:Math.sin(clock*1.6+index)*.7;
-    c.fillStyle='#020c0bac';c.beginPath();c.ellipse(x,y+2,w*.65,6*depth,0,0,Math.PI*2);c.fill();
-    if(hero&&this.playing){c.strokeStyle='#dfb96a88';c.lineWidth=1.2;c.beginPath();c.ellipse(x,y+3,w*.62,7,0,0,Math.PI*2);c.stroke();}
+    const h=139*depth*(animated?320/300:1),w=im.width/im.height*h;
+    const shadowWidth=21*depth;
+    c.fillStyle='#020c0b85';c.beginPath();c.ellipse(x,y+2,shadowWidth,4*depth,0,0,Math.PI*2);c.fill();
+    if(hero&&this.playing){c.strokeStyle='#dfb96a55';c.lineWidth=1;c.beginPath();c.ellipse(x,y+3,shadowWidth,5,0,0,Math.PI*2);c.stroke();}
     c.save();c.translate(x,y);c.scale(flip,1);
-    c.save();c.scale(1,-.28);c.globalAlpha=.19;
-    for(let sy=0;sy<im.height;sy+=12){const sh=Math.min(12,im.height-sy),ripple=Math.sin(sy*.09+clock*3)*2;c.drawImage(im,0,sy,im.width,sh,-w/2+ripple,-h+sy/im.height*h,w,sh/im.height*h+1);}
-    c.restore();
-    c.translate(0,-bob);
-    if(walk&&!animated){const split=.62,upper=h*split,leg=h-upper,sway=Math.sin(phase)*2.3;
-      c.drawImage(im,0,0,im.width,im.height*split,-w/2,-h+sway*.12,w,upper);
-      c.drawImage(im,0,im.height*split,im.width/2,im.height*(1-split),-w/2-1,-leg+Math.max(0,sway),w/2+1,leg-Math.max(0,sway));
-      c.drawImage(im,im.width/2,im.height*split,im.width/2,im.height*(1-split),0,-leg+Math.max(0,-sway),w/2+1,leg-Math.max(0,-sway));
-    }else c.drawImage(im,-w/2,-h,w,h);
+    c.save();c.scale(1,-.20);c.globalAlpha=.07;c.drawImage(im,-w/2,-h,w,h);c.restore();
+    c.drawImage(im,-w/2,-h,w,h);
     c.restore();
     if(hero&&this.playing&&!this.conversation){c.font='10px monospace';c.textAlign='center';c.fillStyle='#ecd49c';c.fillText('SWANGO',x,y-h-15);}
   }
@@ -167,30 +184,18 @@ export class Game {
     // Animated light spill, rain, reflections and rising vapor sit over the painted set.
     c.save();c.globalCompositeOperation='screen';
     const glow=(x:number,y:number,r:number,color:string)=>{const g=c.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,color);g.addColorStop(1,'transparent');c.fillStyle=g;c.fillRect(x-r,y-r,r*2,r*2);};
-    const flicker=Math.sin(t*2.1)>.95?.03:.12;
-    glow(933,304,180,`rgba(15,165,122,${flicker+.04*Math.sin(t*3)})`);glow(180,419,180,`rgba(208,105,29,${.12+.035*Math.sin(t*1.7)})`);
-    glow(700+Math.sin(t*.13)*460,730,200,`rgba(39,145,148,${.04+.04*Math.sin(t*.7)})`);
-    c.globalAlpha=.08+.07*Math.abs(Math.sin(t*.6));c.drawImage(this.background,1120,344,226,84,875,269,176.5,65.6);c.globalAlpha=1;
+    const neon=.045+.006*Math.sin(t*.81)+.003*Math.sin(t*2.7);
+    glow(933,304,145,`rgba(15,165,122,${neon})`);glow(180,419,155,`rgba(208,105,29,${.045+.004*Math.sin(t*.63)})`);
+    glow(939,706,120,`rgba(39,145,148,${neon*.5})`);
     c.restore();
-    // Rotate only the fan interiors; the surrounding housings stay fixed in the set.
-    for(const [x,y,r,speed] of [[272,100,17,2.4],[861,217,18,-3.1],[1178,203,14,4]]){
-      c.save();c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.clip();c.translate(x,y);c.rotate(t*speed);c.drawImage(this.background,(x-r)*1.28,(y-r)*1.28,r*2*1.28,r*2*1.28,-r,-r,r*2,r*2);c.restore();
-    }
-    this.steam(177,493,100,t,1);this.steam(1035,577,75,t,2);
-    const people=RESIDENTS.map(n=>({index:n.sprite,x:n.x,y:n.y,walk:this.residentMotion.get(n.id)?.walk??false,flip:this.residentMotion.get(n.id)?.flip??1,hero:false,crowd:-1,offset:n.sprite*2.4}));
-    for(let i=0;i<7;i++){
-      const direction=i%2?1:-1,progress=(t*(.017+i*.0015)+i*.173)%1;
-      const x=direction===1?-100+progress*1400:1300-progress*1400,y=606+(i%4)*35;
-      people.push({index:5,x,y,walk:!this.reduced,flip:direction,hero:false,crowd:i%2,offset:i*1.71});
-    }
-    // Smaller figures drift through the far passage, behind the walkable foreground.
-    for(let i=0;i<3;i++){const f=(t*.02+i*.34)%1;people.push({index:5,x:565+Math.sin(i*3+f)*22,y:505+f*96,walk:!this.reduced,flip:i%2?1:-1,hero:false,crowd:i%2,offset:i*3});}
-    people.push({index:0,x:this.player.x,y:this.player.y,walk:this.moving,flip:this.facing,hero:true,crowd:-1,offset:0});
-    people.sort((a,b)=>a.y-b.y).forEach(p=>this.person(p.index,p.x,p.y,p.walk,p.flip,p.hero,p.crowd,p.offset));
-    this.steam(695,756,125,t,3);
+    this.steam(177,493,90,t,1);this.steam(1035,577,60,t,2);
+    const people=RESIDENTS.map(n=>({index:n.sprite,x:n.x,y:n.y,walk:false,flip:n.id==='nell'?-1:1,hero:false,crowd:-1,offset:0,size:1}));
+    for(const w of this.walkers)people.push({index:5,x:w.x,y:w.y,walk:w.moving,flip:w.direction,hero:false,crowd:w.variant,offset:w.travel,size:w.scale});
+    people.push({index:0,x:this.player.x,y:this.player.y,walk:this.moving,flip:this.facing,hero:true,crowd:-1,offset:this.travel,size:1});
+    people.sort((a,b)=>a.y-b.y).forEach(p=>this.person(p.index,p.x,p.y,p.walk,p.flip,p.hero,p.crowd,p.offset,p.size));
     c.save();c.lineWidth=1;
-    for(let i=0;i<130;i++){const x=(i*139.31+t*20)%1200,y=(i*83.61+t*(230+(i%4)*20))%800;c.strokeStyle=`rgba(153,191,175,${.08+(i%3)*.025})`;c.beginPath();c.moveTo(x,y);c.lineTo(x-2,y+9);c.stroke();}
-    for(let i=0;i<18;i++){const x=(i*67+35)%1200,y=600+(i*43)%175,f=(t*.8+i*.37)%1;c.strokeStyle=`rgba(158,200,172,${(1-f)*.12})`;c.beginPath();c.ellipse(x,y,2+f*10,1+f*2,0,0,Math.PI*2);c.stroke();}
+    for(let i=0;i<68;i++){const x=(i*139.31+t*8)%1200,y=(i*83.61+t*(230+(i%4)*20))%800;c.strokeStyle=`rgba(153,191,175,${.04+(i%3)*.015})`;c.beginPath();c.moveTo(x,y);c.lineTo(x-.6,y+6);c.stroke();}
+    for(let i=0;i<12;i++){const x=(i*97+35)%1200,y=625+(i*43)%140,f=(t*.55+i*.37)%1;c.strokeStyle=`rgba(158,200,172,${Math.sin(f*Math.PI)*.075})`;c.beginPath();c.ellipse(x,y,1+f*7,.5+f*1.5,0,0,Math.PI*2);c.stroke();}
     c.restore();
     if(this.target&&this.playing){c.strokeStyle='#e9c88288';c.beginPath();c.ellipse(this.target.x,this.target.y,8,3,0,0,Math.PI*2);c.stroke();}
     if(this.near&&this.playing&&!this.conversation){const n=this.near,h=139*(.83+(n.y-600)/450);c.font='12px monospace';c.textAlign='center';const w=c.measureText(n.name).width+20;c.fillStyle='#0a1d18e0';c.fillRect(n.x-w/2,n.y-h-28,w,21);c.fillStyle='#e9cf94';c.fillText(n.name,n.x,n.y-h-13);}
@@ -198,7 +203,7 @@ export class Game {
   private steam(x:number,y:number,height:number,t:number,seed:number){
     if(!this.puff){const p=document.createElement('canvas');p.width=96;p.height=96;const pc=p.getContext('2d')!,g=pc.createRadialGradient(48,48,0,48,48,48);g.addColorStop(0,'#bdc8b4');g.addColorStop(.35,'#bdc8b49a');g.addColorStop(1,'#bdc8b400');pc.fillStyle=g;pc.fillRect(0,0,96,96);this.puff=p;}
     const c=this.ctx;c.save();
-    for(let i=0;i<13;i++){const f=(t*.13+i/13+seed*.24)%1,s=20+f*58,drift=Math.sin(i*2.13+f*4+seed)*12+f*28;c.globalAlpha=Math.sin(f*Math.PI)*.13;c.drawImage(this.puff,x+drift-s/2,y-f*height-s/2,s,s*1.2);}
+    for(let i=0;i<19;i++){const f=(t*.065+i/19+seed*.24)%1,s=12+f*37,drift=Math.sin(seed+f*2)*9+f*17;c.globalAlpha=Math.sin(f*Math.PI)*.075;c.drawImage(this.puff,x+drift-s/2,y-f*height-s/2,s,s*1.4);}
     c.restore();
   }
   destroy(){this.destroyed=true;cancelAnimationFrame(this.frame);window.removeEventListener('keydown',this.keydown);window.removeEventListener('keyup',this.keyup);window.removeEventListener('blur',this.blur);this.canvas.removeEventListener('pointerdown',this.pointer);}
