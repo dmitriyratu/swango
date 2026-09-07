@@ -103,7 +103,7 @@ export class Game {
     if(this.time>this.nextAside){const n=RESIDENTS[Math.floor(Math.random()*RESIDENTS.length)];this.cb.aside({name:n.name,line:n.asides[Math.floor(Math.random()*n.asides.length)]});this.clearAside=this.time+6;this.nextAside=this.time+16+Math.random()*6;}
   }
   private poses():ActorPose[]{
-    const models=['worker','mechanic','casual','neighbor'];
+    const models=['worker','mechanic','suit','neighbor'];
     const poses:ActorPose[]=RESIDENTS.map((n,i)=>({id:n.id,model:models[i],x:n.x,y:n.y,height:[125,122,140,122][i],vx:0,vy:0,face:this.conversation?.resident.id===n.id?Math.atan2(this.player.x-n.x,(this.player.y-n.y)*1.6):[0,-.5,.25,-.3][i],activity:this.conversation?.resident.id===n.id?'talk':i===0?'serve':i===1?'repair':'idle',skin:i%3}));
     for(const c of this.citizens)poses.push({...c,height:c.height*(.88+(c.y-631)/650),carrying:c.id==='delivery'&&c.stop>=2});
     poses.push({id:'swango',model:'hoodie',...this.player,height:137*(.9+(this.player.y-600)/650),vx:this.velocity.x,vy:this.velocity.y,face:this.heading,activity:this.moving?'walk':this.conversation?'talk':'idle',skin:1,coat:'#b08839'});
@@ -118,6 +118,10 @@ export class Game {
     const neon=.045+.006*Math.sin(t*.81)+.003*Math.sin(t*2.7);
     glow(933,304,145,`rgba(15,165,122,${neon})`);glow(180,419,155,`rgba(208,105,29,${.045+.004*Math.sin(t*.63)})`);
     glow(939,706,120,`rgba(39,145,148,${neon*.5})`);
+    // Soft light drifts through the distant cross street and across the wet stones.
+    const passing=(t%23)/23,spill=Math.pow(Math.max(0,Math.sin(passing*Math.PI*2)),8)*.065;
+    glow(545+passing*155,511,95,`rgba(209,216,168,${spill})`);
+    glow(593+passing*72,683,85,`rgba(190,199,142,${spill*.35})`);
     c.restore();
     this.steam(177,493,90,t,1);this.steam(1035,577,60,t,2);
     const poses=this.poses();

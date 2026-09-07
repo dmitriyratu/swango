@@ -11,6 +11,7 @@ export class PeopleScene{
  private templates=new Map<string,GLTF>();private actors=new Map<string,Rig>();
  private animatedProps:{object:T.Object3D;kind:string;seed:number}[]=[];
  private lastTime=0;
+ private checkedPixels=false;
  private target=new T.WebGLRenderTarget(600,400,{minFilter:T.NearestFilter,magFilter:T.NearestFilter});
  private finishScene=new T.Scene();
  private finishCamera=new T.OrthographicCamera(-1,1,1,-1,0,1);
@@ -36,24 +37,35 @@ export class PeopleScene{
  });
  constructor(){
   this.renderer=new T.WebGLRenderer({alpha:true,antialias:false,premultipliedAlpha:true});this.renderer.setPixelRatio(1);this.renderer.setSize(600,400,false);this.renderer.setClearColor(0x000000,0);this.renderer.outputColorSpace=T.SRGBColorSpace;
-  this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=.87;
-  this.finishScene.add(new T.Mesh(new T.PlaneGeometry(2,2),this.finishMaterial));
+  this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.08;
+  const screen=new T.Mesh(new T.PlaneGeometry(2,2),this.finishMaterial);screen.frustumCulled=false;this.finishScene.add(screen);
   this.canvas=this.renderer.domElement;this.camera.position.set(0,0,1200);this.camera.lookAt(0,0,0);
-  this.scene.add(new T.HemisphereLight(0x718b82,0x171c16,.85));
+  this.scene.add(new T.HemisphereLight(0x9aa99b,0x30291f,1.35));
+  const faceLight=new T.DirectionalLight(0xe9dcc2,.8);faceLight.position.set(0,170,600);this.scene.add(faceLight);
   const warm=new T.DirectionalLight(0xffc87e,2.3);warm.position.set(-500,650,160);this.scene.add(warm);
   const cool=new T.DirectionalLight(0x65bfb6,1.8);cool.position.set(550,260,-200);this.scene.add(cool);
   this.makeProps();
  }
- async load(){const loader=new GLTFLoader();await Promise.all(['hoodie','worker','casual','suit','punk','mechanic','neighbor','shopper','courier'].map(async name=>this.templates.set(name,await loader.loadAsync(`/models/${name}.glb`))));}
+ async load(){const loader=new GLTFLoader();await Promise.all(['hoodie','worker','casual','suit','mechanic','neighbor','shopper'].map(async name=>this.templates.set(name,await loader.loadAsync(`/models/${name}.glb`))));}
  private build(p:ActorPose):Rig{
   const source=this.templates.get(p.model);if(!source)throw new Error(`Missing ${p.model}`);
   const model=clone(source.scene),group=new T.Group();group.add(model);
   const bounds=new T.Box3().setFromObject(model),size=bounds.getSize(new T.Vector3());
   const scale=p.height/size.y;model.scale.multiplyScalar(scale);model.position.y-=bounds.min.y*scale;
-  model.traverse(o=>{if(o instanceof T.Mesh){o.frustumCulled=false;const materials=Array.isArray(o.material)?o.material:[o.material];o.material=materials.map(original=>{const m=original.clone() as T.MeshStandardMaterial;m.roughness=1;m.metalness=0;
-   if(m.color){if(/skin/i.test(m.name))m.color.set(['#ac8267','#755344','#bb9173'][p.skin??0]);else if(/purple/i.test(m.name)&&p.coat)m.color.set(p.coat);else {
+  model.traverse(o=>{if(o instanceof T.Mesh){o.frustumCulled=false;const materials=Array.isArray(o.material)?o.material:[o.material];
+   // Replace construction helmets with the named residents' own headwear.
+   if(['jun','mara'].includes(p.id)&&/head/i.test(o.name+' '+o.parent?.name)&&materials.every(m=>m.name==='Worker_Yellow'))o.visible=false;
+   o.material=materials.map(original=>{const m=original.clone() as T.MeshStandardMaterial;m.roughness=1;m.metalness=0;
+   const uniforms:Record<string,Record<string,string>>={
+    jun:{Worker_Yellow:'#253f40',Worker_Vest:'#d4c5a6',LightBrown:'#3e4843',Brown:'#363d39',Brown2:'#464941',Moustache:'#a4a394'},
+    mara:{Worker_Vest:'#337d7c',Worker_Yellow:'#c7a065',White:'#b8c0ac',Brown_02:'#324b51',Brown2:'#3c5357'},
+    ivo:{Suit:'#6b7d84',Tie:'#ae7858',White:'#b7b0a0',Grey:'#484f52'},
+    nell:{LimeGreen:'#8c435d',Brown:'#9b9389',Red:'#493a38',Gold:'#b68e58'},
+   };
+   const uniform=uniforms[p.id]?.[m.name];
+   if(m.color){if(/skin/i.test(m.name))m.color.set(['#e1bda0','#d3a88a','#edcbb0','#ad8168'][p.skin??0]);else if(uniform)m.color.set(uniform);else if(/purple|red_dark/i.test(m.name)&&p.coat)m.color.set(p.coat);else {
     const hsl={h:0,s:0,l:0};m.color.getHSL(hsl);
-    m.color.setHSL(hsl.h,hsl.s*.38,Math.min(.43,hsl.l*.65));
+    m.color.setHSL(hsl.h,hsl.s*.45,Math.min(.58,hsl.l*.8));
    }}
    const fabric=!/skin|eye|hair|brow/i.test(m.name);
    m.onBeforeCompile=shader=>{
@@ -76,9 +88,10 @@ export class PeopleScene{
   for(const clip of source.animations){if(['Idle','Idle_Neutral','Walk','Interact','Wave'].includes(clip.name)){const a=mixer.clipAction(clip);a.enabled=true;a.play();a.setEffectiveWeight(0);actions[clip.name]=a;}}
   const idle=actions.Idle_Neutral??actions.Idle;idle.setEffectiveWeight(1);idle.time=(p.x*.013)%idle.getClip().duration;mixer.update(0);
   const props:T.Object3D[]=[];
-  if(p.id==='jun'||p.id==='delivery'){
+  this.dressResident(model,p.id);
+  if(p.id==='jun'){
    const hand=model.getObjectByName('WristL')??model.getObjectByName('Wrist.L');
-   if(hand){const object=p.id==='jun'?new T.Mesh(new T.SphereGeometry(.095,12,6,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xb7aaa0,side:T.DoubleSide})):new T.Mesh(new T.BoxGeometry(.22,.18,.22),new T.MeshStandardMaterial({color:0x9a7651}));
+   if(hand){const object=new T.Mesh(new T.SphereGeometry(.095,12,6,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xc6baa5,side:T.DoubleSide}));
     object.rotation.x=Math.PI;hand.add(object);props.push(object);}
   }
   // Reduce the oversized cartoon head without changing the shared locomotion rig.
@@ -92,7 +105,7 @@ export class PeopleScene{
   for(const p of poses){const rig=this.actors.get(p.id)??this.build(p);rig.group.visible=true;rig.group.position.set(p.x-600,400-p.y,(p.y-600)*.2);rig.group.scale.setScalar(p.height/rig.height);
    let turn=p.face-rig.face;turn=Math.atan2(Math.sin(turn),Math.cos(turn));rig.face+=turn*(1-Math.exp(-dt*8));rig.group.rotation.y=rig.face;
    const moving=p.activity==='walk'&&Math.hypot(p.vx,p.vy)>.5;
-   const busy=['serve','repair','shop','carry'].includes(p.activity),greeting=p.activity==='wave'||p.activity==='talk'&&Math.sin(time*.47+p.x)>.72;
+   const busy=['serve','repair','shop'].includes(p.activity),greeting=p.activity==='wave'||p.activity==='talk'&&Math.sin(time*.47+p.x)>.9;
    const target=moving?'Walk':busy?'Interact':greeting?'Wave':(rig.actions.Idle_Neutral?'Idle_Neutral':'Idle');
    const speed=Math.hypot(p.vx,p.vy*1.6);const blend=1-Math.exp(-dt*10);
    for(const [name,action]of Object.entries(rig.actions)){const weight=action.getEffectiveWeight();action.setEffectiveWeight(T.MathUtils.lerp(weight,name===target?1:0,blend));
@@ -109,6 +122,27 @@ export class PeopleScene{
   }
   this.renderer.setRenderTarget(this.target);this.renderer.render(this.scene,this.camera);
   this.renderer.setRenderTarget(null);this.renderer.render(this.finishScene,this.finishCamera);
+  if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(600*400*4);this.renderer.readRenderTargetPixels(this.target,0,0,600,400,pixels);let scenePixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])scenePixels++;const gl=this.renderer.getContext();gl.readPixels(0,0,600,400,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let outputPixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])outputPixels++;console.info('Character render diagnostic '+JSON.stringify({scenePixels,outputPixels}));}
+ }
+ private dressResident(model:T.Object3D,id:string){
+  const chest=model.getObjectByName('Chest'),head=model.getObjectByName('Head');
+  const cloth=(color:string)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});
+  const attach=(bone:T.Object3D|undefined,geometry:T.BufferGeometry,color:string,x:number,y:number,z:number)=>{const mesh=new T.Mesh(geometry,cloth(color));mesh.position.set(x,y,z);bone?.add(mesh);return mesh;};
+  if(id==='jun'){
+   attach(chest,new T.PlaneGeometry(.37,.64,2,4),'#d8c8a5',0,-.22,.175);
+   attach(chest,new T.PlaneGeometry(.15,.13),'#ad9c7b',.03,-.25,.182);
+   for(const x of [-.12,.12])attach(chest,new T.PlaneGeometry(.026,.24),'#d8c8a5',x,.09,.156);
+   const cap=attach(head,new T.SphereGeometry(.145,12,6,0,Math.PI*2,0,Math.PI/2),'#263f40',0,.24,0);cap.scale.y=.46;
+  }
+  if(id==='mara'){
+   const band=attach(head,new T.TorusGeometry(.13,.019,5,18),'#c29b62',0,.18,0);band.rotation.x=Math.PI/2;
+   attach(chest,new T.PlaneGeometry(.08,.045),'#e6c590',.11,.025,.14);
+  }
+  if(id==='ivo')for(const x of [-.12,.12])attach(chest,new T.PlaneGeometry(.022,.28),'#c7c7b2',x,-.025,.16);
+  if(id==='nell'){
+   const scarf=attach(chest,new T.TorusGeometry(.105,.032,5,14),'#bd9670',0,.17,0);scarf.rotation.x=Math.PI/2;
+   attach(chest,new T.PlaneGeometry(.065,.3),'#bd9670',.07,-.015,.16);
+  }
  }
  private makeProps(){
   const material=(color:number)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});
@@ -119,3 +153,4 @@ export class PeopleScene{
  }
  destroy(){for(const rig of this.actors.values()){rig.mixer.stopAllAction();rig.mixer.uncacheRoot(rig.model);}this.scene.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});this.finishScene.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});this.finishMaterial.dispose();this.target.dispose();this.renderer.dispose();}
 }
+
