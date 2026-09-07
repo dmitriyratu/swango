@@ -12,7 +12,7 @@ export class PeopleScene{
  private animatedProps:{object:T.Object3D;kind:string;seed:number}[]=[];
  private lastTime=0;
  private checkedPixels=false;
- private target=new T.WebGLRenderTarget(600,400,{minFilter:T.NearestFilter,magFilter:T.NearestFilter});
+ private target=new T.WebGLRenderTarget(1200,800,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,samples:4});
  private finishScene=new T.Scene();
  private finishCamera=new T.OrthographicCamera(-1,1,1,-1,0,1);
  private finishMaterial=new T.ShaderMaterial({
@@ -32,11 +32,11 @@ export class PeopleScene{
     float luminance=dot(rgb,vec3(.2126,.7152,.0722));
     rgb=mix(vec3(luminance),rgb,.73);
     rgb=mix(vec3(.026,.051,.043),rgb,.94);
-    gl_FragColor.rgb=clamp(floor(rgb*31.+grain*.8+.5)/31.,0.,1.);
+    gl_FragColor.rgb=clamp(floor(rgb*63.+grain*.25+.5)/63.,0.,1.);
    }`,depthTest:false,depthWrite:false,transparent:true,
  });
  constructor(){
-  this.renderer=new T.WebGLRenderer({alpha:true,antialias:false,premultipliedAlpha:true});this.renderer.setPixelRatio(1);this.renderer.setSize(600,400,false);this.renderer.setClearColor(0x000000,0);this.renderer.outputColorSpace=T.SRGBColorSpace;
+  this.renderer=new T.WebGLRenderer({alpha:true,antialias:false,premultipliedAlpha:true});this.renderer.setPixelRatio(1);this.renderer.setSize(1200,800,false);this.renderer.setClearColor(0x000000,0);this.renderer.outputColorSpace=T.SRGBColorSpace;
   this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.08;
   const screen=new T.Mesh(new T.PlaneGeometry(2,2),this.finishMaterial);screen.frustumCulled=false;this.finishScene.add(screen);
   this.canvas=this.renderer.domElement;this.camera.position.set(0,0,1200);this.camera.lookAt(0,0,0);
@@ -122,7 +122,7 @@ export class PeopleScene{
   }
   this.renderer.setRenderTarget(this.target);this.renderer.render(this.scene,this.camera);
   this.renderer.setRenderTarget(null);this.renderer.render(this.finishScene,this.finishCamera);
-  if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(600*400*4);this.renderer.readRenderTargetPixels(this.target,0,0,600,400,pixels);let scenePixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])scenePixels++;const gl=this.renderer.getContext();gl.readPixels(0,0,600,400,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let outputPixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])outputPixels++;console.info('Character render diagnostic '+JSON.stringify({scenePixels,outputPixels}));}
+  if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(1200*800*4);this.renderer.readRenderTargetPixels(this.target,0,0,1200,800,pixels);let scenePixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])scenePixels++;const gl=this.renderer.getContext();gl.readPixels(0,0,1200,800,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let outputPixels=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])outputPixels++;console.info('Character render diagnostic '+JSON.stringify({scenePixels,outputPixels}));}
  }
  private dressResident(model:T.Object3D,id:string){
   const chest=model.getObjectByName('Chest'),head=model.getObjectByName('Head');
@@ -153,4 +153,5 @@ export class PeopleScene{
  }
  destroy(){for(const rig of this.actors.values()){rig.mixer.stopAllAction();rig.mixer.uncacheRoot(rig.model);}this.scene.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});this.finishScene.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});this.finishMaterial.dispose();this.target.dispose();this.renderer.dispose();}
 }
+
 
