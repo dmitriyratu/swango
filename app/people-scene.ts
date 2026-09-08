@@ -13,7 +13,6 @@ export class PeopleScene{
  private scene=new T.Scene();private camera=new T.OrthographicCamera(-600,600,400,-400,.1,3000);
  private templates=new Map<string,GLTF>();private surfaces=new Map<string,Surface>();private actors=new Map<string,Rig>();
  private animatedProps:{object:T.Object3D;kind:string;seed:number}[]=[];
- private portraits=new Map<string,string>();
  private lastTime=0;private checkedPixels=false;
  constructor(){
   this.renderer=new T.WebGLRenderer({alpha:true,antialias:true,premultipliedAlpha:true});
@@ -81,29 +80,6 @@ export class PeopleScene{
   }
   this.renderer.render(this.scene,this.camera);
   if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(1800*1200*4),gl=this.renderer.getContext();gl.readPixels(0,0,1800,1200,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let visible=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])visible++;console.info('Scanned civilian render '+JSON.stringify({models:this.templates.size,actors:poses.length,visiblePixels:visible}));}
- }
- portrait(id:string):string|null{
-  const cached=this.portraits.get(id);if(cached)return cached;
-  const rig=this.actors.get(id);if(!rig)return null;
-  const subject=clone(rig.model),scene=new T.Scene();scene.add(subject);
-  const head=subject.getObjectByName('head');if(head&&rig.headRest)head.quaternion.copy(rig.headRest);
-  subject.updateMatrixWorld(true);
-  const headPosition=head?.getWorldPosition(new T.Vector3())??new T.Vector3(0,rig.height*.91,0);
-  const center=new T.Vector3(headPosition.x,headPosition.y-3,0),halfHeight=rig.height*.22;
-  const camera=new T.OrthographicCamera(-halfHeight*5/6,halfHeight*5/6,halfHeight,-halfHeight,.1,1000);
-  camera.position.set(center.x,center.y,300);camera.lookAt(center);
-  scene.add(new T.HemisphereLight(0xe7e4d5,0x53655c,2));
-  const key=new T.DirectionalLight(0xffdfb1,3);key.position.set(-80,180,220);scene.add(key);
-  const rim=new T.DirectionalLight(0x80cabe,1.4);rim.position.set(100,120,-60);scene.add(rim);
-  const size=this.renderer.getSize(new T.Vector2()),color=this.renderer.getClearColor(new T.Color()).clone(),alpha=this.renderer.getClearAlpha();
-  try{
-   this.renderer.setSize(320,384,false);this.renderer.setClearColor(0x122824,1);this.renderer.render(scene,camera);
-   const portrait=this.canvas.toDataURL('image/png');this.portraits.set(id,portrait);return portrait;
-  }finally{
-   this.renderer.setSize(size.x,size.y,false);this.renderer.setClearColor(color,alpha);
-   // The clone shares geometry and materials with its street counterpart.
-   scene.remove(subject);
-  }
  }
  private makeProps(){
   const material=(color:number)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});

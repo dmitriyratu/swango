@@ -63,7 +63,7 @@ export class Game {
   setPaused(value:boolean){this.paused=value;this.keys.clear();this.target=null;}
   home(){this.playing=false;this.keys.clear();this.target=null;this.conversation=null;this.near=null;this.cb.conversation(null);this.cb.nearby(null);this.cb.aside(null);}
   setDirection(dir:string,on:boolean){if(on){this.keys.add(dir);this.target=null;this.autoTalk=null;}else this.keys.delete(dir);}
-  interact(){if(this.paused||!this.playing||this.conversation)return;const n=closest(this.player,RESIDENTS);if(!n)return;const i=nextIndex(n.lines.length,this.previous[n.id]??-1);this.previous[n.id]=i;this.conversation={...n.lines[i],resident:n,portrait:this.people?.portrait(n.id)};this.keys.clear();this.target=null;this.cb.conversation(this.conversation);this.cb.aside(null);}
+  interact(){if(this.paused||!this.playing||this.conversation)return;const n=closest(this.player,RESIDENTS);if(!n)return;const i=nextIndex(n.lines.length,this.previous[n.id]??-1);this.previous[n.id]=i;this.conversation={...n.lines[i],resident:n,portrait:`/portraits/${n.id}.png`};this.keys.clear();this.target=null;this.cb.conversation(this.conversation);this.cb.aside(null);}
   choose(i:number){if(!this.conversation)return;const choice=this.conversation.choices?.[i];if(!choice)return;this.conversation={resident:this.conversation.resident,portrait:this.conversation.portrait,line:choice.reply};this.cb.conversation(this.conversation);}
   endConversation(){this.conversation=null;this.keys.clear();this.target=null;this.cb.conversation(null);this.nextAside=this.time+10;}
   private keydown=(e:KeyboardEvent)=>{
