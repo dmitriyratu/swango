@@ -2,9 +2,10 @@ import * as T from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import type { Activity } from './street-life';
+import {setHeadPose} from './head-motion';
 import {civilianNames,wardrobe,dressCivilian,poseCivilian} from './civilian-style';
 export type ActorPose={id:string;model:string;x:number;y:number;height:number;vx:number;vy:number;face:number;activity:Activity;skin?:number;coat?:string;carrying?:boolean};
-type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D};
+type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D;headRest?:T.Quaternion};
 type Surface={map:T.Texture;normal:T.Texture;mask1:T.Texture;mask2:T.Texture};
 export class PeopleScene{
  readonly canvas:HTMLCanvasElement;
@@ -53,9 +54,10 @@ export class PeopleScene{
   }});
   dressCivilian(model,p.id,height);
   model.scale.multiplyScalar(p.height/height);model.position.y-=bounds.min.y*(p.height/height);
+  const head=model.getObjectByName('head'),headRest=head?.quaternion.clone();
   const mixer=new T.AnimationMixer(model),walk=mixer.clipAction(source.animations.find(a=>a.name==='Walk')!),idle=mixer.clipAction(source.animations.find(a=>a.name==='Idle')!);
   walk.play().setEffectiveWeight(0);idle.play().setEffectiveWeight(1);idle.time=(p.x*.031)%idle.getClip().duration;walk.time=(Math.abs(p.x)*.017)%walk.getClip().duration;mixer.update(0);
-  const rig={group,model,mixer,walk,idle,face:p.face,height:p.height,head:model.getObjectByName('head')};this.actors.set(p.id,rig);this.scene.add(group);return rig;
+  const rig={group,model,mixer,walk,idle,face:p.face,height:p.height,head,headRest};this.actors.set(p.id,rig);this.scene.add(group);return rig;
  }
  render(poses:ActorPose[],time:number,paused:boolean){
   const dt=paused?0:Math.min(.05,Math.max(0,time-this.lastTime));this.lastTime=time;
@@ -66,7 +68,7 @@ export class PeopleScene{
    const weight=T.MathUtils.lerp(r.walk.getEffectiveWeight(),moving?1:0,1-Math.exp(-dt*9));r.walk.setEffectiveWeight(weight);r.idle.setEffectiveWeight(1-weight);
    r.walk.timeScale=T.MathUtils.clamp(speed/(p.height*.53),.35,1.6);r.idle.timeScale=.72+(p.x%7)*.035;r.mixer.update(dt);
    poseCivilian(r.model,p.id,p.activity,time);
-   if(['talk','serve','repair','shop'].includes(p.activity)&&r.head){r.head.rotateY(Math.sin(time*.6+p.x)*.06);r.head.rotateX(Math.sin(time*.9)*.025);}
+   if(r.head&&r.headRest)setHeadPose(r.head,r.headRest,time,p.id.length,['talk','serve','repair','shop'].includes(p.activity));
   }
   for(const p of this.animatedProps){if(p.kind==='cloth'){const mesh=p.object as T.Mesh<T.PlaneGeometry>,positions=mesh.geometry.attributes.position;
    for(let i=0;i<positions.count;i++){const y=positions.getY(i);positions.setZ(i,Math.sin(time*1.25+positions.getX(i)*.05+p.seed)*(12-y)/24*3.5);}positions.needsUpdate=true;mesh.geometry.computeVertexNormals();}
@@ -85,4 +87,5 @@ export class PeopleScene{
  }
  destroy(){for(const r of this.actors.values()){r.mixer.stopAllAction();r.mixer.uncacheRoot(r.model);}this.scene.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material])m.dispose();}});for(const s of this.surfaces.values())for(const t of Object.values(s))t.dispose();this.renderer.dispose();}
 }
+
 
