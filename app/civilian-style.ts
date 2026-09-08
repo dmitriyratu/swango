@@ -1,5 +1,12 @@
 import * as T from 'three';
 export const civilianNames=['eric','carla','claudia','manuel','nathan','sophia'];
+export const individuality:Record<string,{width:number;skin:[number,number,number]}>=Object.fromEntries([
+ ['swango',1.02,[1.03,.98,.94]],['jun',1.09,[.95,.89,.81]],['mara',.98,[1.07,1.01,.96]],
+ ['ivo',1.06,[1.04,1.02,.98]],['nell',1.03,[.96,.91,.86]],['commuter',.94,[.84,.77,.69]],
+ ['student',.95,[1.1,1.04,.98]],['shopper',1.08,[.93,.85,.77]],['delivery',.96,[.87,.79,.71]],
+ ['friend-a',1.1,[1.08,1.01,.93]],['friend-b',1.04,[.93,.86,.79]],['late-shift',1.12,[1.12,1.05,.98]],
+ ['visitor',.95,[1.04,.96,.88]],
+].map(([id,width,skin])=>[id,{width,skin}])) as Record<string,{width:number;skin:[number,number,number]}>;
 export const wardrobe:Record<string,[string,string]>={
  swango:['#b58c42','#5e6765'],jun:['#657578','#343f42'],mara:['#458382','#555f62'],
  ivo:['#7a929a','#546e80'],nell:['#98526a','#747077'],commuter:['#73898a','#687177'],
@@ -38,6 +45,33 @@ export function dressCivilian(model:T.Object3D,id:string,height:number){
   attach('spine_02',new T.BoxGeometry(17,22,7),'#6e624e',-20,height*.52,4);
   const strap=new T.PlaneGeometry(2.6,height*.3);strap.rotateZ(-.38);attach('spine_03',strap,'#655b47',0,height*.72,14);
  }
+ const bag=(color:string,back=false)=>{
+  attach('spine_02',new T.BoxGeometry(back?26:18,back?34:24,back?11:6),color,back?0:-22,height*(back?.69:.52),back?-14:3);
+  if(back)for(const x of [-12,12])attach('spine_03',new T.PlaneGeometry(3,35),color,x,height*.74,12);
+  else {const strap=new T.PlaneGeometry(2.5,height*.3);strap.rotateZ(-.38);attach('spine_03',strap,color,0,height*.72,14);}
+ };
+ const glasses=()=>{
+  for(const x of [-4.5,4.5]){const lens=new T.TorusGeometry(3.4,.45,6,18);lens.scale(1.15,.8,1);attach('head',lens,'#514839',x,height*.942,9.5);}
+  attach('head',new T.BoxGeometry(2.4,.55,.6),'#514839',0,height*.943,9.5);
+ };
+ const beanie=(color:string)=>{const cap=attach('head',new T.SphereGeometry(10.5,20,12,0,Math.PI*2,0,Math.PI/2),color,0,height-3,0);if(cap)cap.scale.y*=.72;};
+ const scarf=(color:string)=>{const loop=new T.TorusGeometry(8.5,2.8,8,20);loop.rotateX(Math.PI/2);attach('neck',loop,color,0,height*.855,0);attach('spine_03',new T.PlaneGeometry(7,29),color,6,height*.76,14);};
+ if(id==='commuter'){glasses();bag('#51483e');}
+ if(id==='student'){
+  bag('#737956',true);
+  const band=new T.TorusGeometry(11,1.1,8,24,Math.PI);attach('head',band,'#333d42',0,height*.954,0);
+  for(const x of [-10.5,10.5])attach('head',new T.SphereGeometry(3.1,12,8),'#b09a6b',x,height*.94,0);
+ }
+ if(id==='shopper')bag('#b5a187');
+ if(id==='delivery'){bag('#496471',true);beanie('#a38c62');}
+ if(id==='friend-a')scarf('#a77f57');
+ if(id==='friend-b'){
+  bag('#7b554f');
+  for(const x of [-9,9])attach('head',new T.TorusGeometry(1.4,.38,6,14),'#c0a667',x,height*.925,1);
+ }
+ if(id==='late-shift'){beanie('#6b7370');bag('#68765b');}
+ if(id==='visitor'){glasses();scarf('#ad9f8d');}
+ if(id==='nell')glasses();
 }
 // Position hands using the full scanned skeleton; the geometry and clothing
 // follow the joints, with no sprite warping or frozen interaction frame.

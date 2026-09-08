@@ -4,7 +4,7 @@ import { streetCast, updateCitizen, movePlayer } from './street-life';
 export type Choice={text:string;reply:string};
 type Exchange={line:string;choices?:Choice[]};
 export type Resident=Point&{id:string;name:string;role:string;sprite:number;lines:Exchange[];asides:string[]};
-export type Conversation=Exchange&{resident:Resident};
+export type Conversation=Exchange&{resident:Resident;portrait?:string|null};
 const RESIDENTS:Resident[]=[
  {id:'jun',name:'Jun',role:'NOODLE STALL OWNER',sprite:1,x:250,y:615,asides:['Two bowls. One without spring onions. I still make his by mistake.','Rain means customers. Cold rain means good customers.'],lines:[
   {line:'You hungry, or just trying to stand somewhere warm? Both are respectable reasons.',choices:[{text:'What’s good tonight?',reply:'The broth. Same as yesterday. The trick is to live a slightly different day before you eat it.'},{text:'Just the warmth, for now.',reply:'Then stand on this side. The extractor’s broken. For once, a broken thing is doing somebody a favor.'}]},
@@ -63,8 +63,8 @@ export class Game {
   setPaused(value:boolean){this.paused=value;this.keys.clear();this.target=null;}
   home(){this.playing=false;this.keys.clear();this.target=null;this.conversation=null;this.near=null;this.cb.conversation(null);this.cb.nearby(null);this.cb.aside(null);}
   setDirection(dir:string,on:boolean){if(on){this.keys.add(dir);this.target=null;this.autoTalk=null;}else this.keys.delete(dir);}
-  interact(){if(this.paused||!this.playing||this.conversation)return;const n=closest(this.player,RESIDENTS);if(!n)return;const i=nextIndex(n.lines.length,this.previous[n.id]??-1);this.previous[n.id]=i;this.conversation={...n.lines[i],resident:n};this.keys.clear();this.target=null;this.cb.conversation(this.conversation);this.cb.aside(null);}
-  choose(i:number){if(!this.conversation)return;const choice=this.conversation.choices?.[i];if(!choice)return;this.conversation={resident:this.conversation.resident,line:choice.reply};this.cb.conversation(this.conversation);}
+  interact(){if(this.paused||!this.playing||this.conversation)return;const n=closest(this.player,RESIDENTS);if(!n)return;const i=nextIndex(n.lines.length,this.previous[n.id]??-1);this.previous[n.id]=i;this.conversation={...n.lines[i],resident:n,portrait:this.people?.portrait(n.id)};this.keys.clear();this.target=null;this.cb.conversation(this.conversation);this.cb.aside(null);}
+  choose(i:number){if(!this.conversation)return;const choice=this.conversation.choices?.[i];if(!choice)return;this.conversation={resident:this.conversation.resident,portrait:this.conversation.portrait,line:choice.reply};this.cb.conversation(this.conversation);}
   endConversation(){this.conversation=null;this.keys.clear();this.target=null;this.cb.conversation(null);this.nextAside=this.time+10;}
   private keydown=(e:KeyboardEvent)=>{
     if(!this.playing)return;
@@ -143,4 +143,5 @@ export class Game {
   }
   destroy(){this.destroyed=true;this.people?.destroy();cancelAnimationFrame(this.frame);window.removeEventListener('keydown',this.keydown);window.removeEventListener('keyup',this.keyup);window.removeEventListener('blur',this.blur);this.canvas.removeEventListener('pointerdown',this.pointer);}
 }
+
 

@@ -3,7 +3,7 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import type { Activity } from './street-life';
 import {setHeadPose} from './head-motion';
-import {civilianNames,wardrobe,dressCivilian,poseCivilian} from './civilian-style';
+import {civilianNames,wardrobe,individuality,dressCivilian,poseCivilian} from './civilian-style';
 export type ActorPose={id:string;model:string;x:number;y:number;height:number;vx:number;vy:number;face:number;activity:Activity;skin?:number;coat?:string;carrying?:boolean};
 type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D;headRest?:T.Quaternion};
 type Surface={map:T.Texture;normal:T.Texture;mask1:T.Texture;mask2:T.Texture};
@@ -13,6 +13,7 @@ export class PeopleScene{
  private scene=new T.Scene();private camera=new T.OrthographicCamera(-600,600,400,-400,.1,3000);
  private templates=new Map<string,GLTF>();private surfaces=new Map<string,Surface>();private actors=new Map<string,Rig>();
  private animatedProps:{object:T.Object3D;kind:string;seed:number}[]=[];
+ private portraits=new Map<string,string>();
  private lastTime=0;private checkedPixels=false;
  constructor(){
   this.renderer=new T.WebGLRenderer({alpha:true,antialias:true,premultipliedAlpha:true});
@@ -42,18 +43,21 @@ export class PeopleScene{
   model.traverse(o=>{if(o instanceof T.Mesh){o.frustumCulled=false;
    const material=new T.MeshStandardMaterial({map:surface.map,normalMap:surface.normal,normalScale:new T.Vector2(.55,.55),roughness:.88,metalness:0});
    material.onBeforeCompile=shader=>{
+    shader.uniforms.skinTint={value:new T.Vector3(...(individuality[p.id]?.skin??[1,1,1]))};
     shader.uniforms.garmentOne={value:surface.mask1};shader.uniforms.garmentTwo={value:surface.mask2};shader.uniforms.tintOne={value:new T.Color(colors[0])};shader.uniforms.tintTwo={value:new T.Color(colors[1])};
-    shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nuniform sampler2D garmentOne;uniform sampler2D garmentTwo;uniform vec3 tintOne;uniform vec3 tintTwo;')
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nuniform vec3 skinTint;uniform sampler2D garmentOne;uniform sampler2D garmentTwo;uniform vec3 tintOne;uniform vec3 tintTwo;')
      .replace('#include <map_fragment>',`#include <map_fragment>
       float clothOne=texture2D(garmentOne,vMapUv).r;
       float clothTwo=texture2D(garmentTwo,vMapUv).r;
+      float warmSkin=smoothstep(.015,.09,diffuseColor.r-diffuseColor.b)*(1.-max(clothOne,clothTwo));
+      diffuseColor.rgb*=mix(vec3(1.),skinTint,warmSkin);
       diffuseColor.rgb*=mix(vec3(1.),tintOne,clothOne*.8);
       diffuseColor.rgb*=mix(vec3(1.),tintTwo,clothTwo*.7);
      `);
    };material.customProgramCacheKey=()=>`civilian-${p.id}`;o.material=material;
   }});
   dressCivilian(model,p.id,height);
-  model.scale.multiplyScalar(p.height/height);model.position.y-=bounds.min.y*(p.height/height);
+  model.scale.multiplyScalar(p.height/height);model.scale.x*=individuality[p.id]?.width??1;model.position.y-=bounds.min.y*(p.height/height);
   const head=model.getObjectByName('head'),headRest=head?.quaternion.clone();
   const mixer=new T.AnimationMixer(model),walk=mixer.clipAction(source.animations.find(a=>a.name==='Walk')!),idle=mixer.clipAction(source.animations.find(a=>a.name==='Idle')!);
   walk.play().setEffectiveWeight(0);idle.play().setEffectiveWeight(1);idle.time=(p.x*.031)%idle.getClip().duration;walk.time=(Math.abs(p.x)*.017)%walk.getClip().duration;mixer.update(0);
@@ -77,6 +81,29 @@ export class PeopleScene{
   }
   this.renderer.render(this.scene,this.camera);
   if(process.env.NODE_ENV==='development'&&!this.checkedPixels&&poses.length){this.checkedPixels=true;const pixels=new Uint8Array(1800*1200*4),gl=this.renderer.getContext();gl.readPixels(0,0,1800,1200,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let visible=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i])visible++;console.info('Scanned civilian render '+JSON.stringify({models:this.templates.size,actors:poses.length,visiblePixels:visible}));}
+ }
+ portrait(id:string):string|null{
+  const cached=this.portraits.get(id);if(cached)return cached;
+  const rig=this.actors.get(id);if(!rig)return null;
+  const subject=clone(rig.model),scene=new T.Scene();scene.add(subject);
+  const head=subject.getObjectByName('head');if(head&&rig.headRest)head.quaternion.copy(rig.headRest);
+  subject.updateMatrixWorld(true);
+  const headPosition=head?.getWorldPosition(new T.Vector3())??new T.Vector3(0,rig.height*.91,0);
+  const center=new T.Vector3(headPosition.x,headPosition.y-3,0),halfHeight=rig.height*.22;
+  const camera=new T.OrthographicCamera(-halfHeight*5/6,halfHeight*5/6,halfHeight,-halfHeight,.1,1000);
+  camera.position.set(center.x,center.y,300);camera.lookAt(center);
+  scene.add(new T.HemisphereLight(0xe7e4d5,0x53655c,2));
+  const key=new T.DirectionalLight(0xffdfb1,3);key.position.set(-80,180,220);scene.add(key);
+  const rim=new T.DirectionalLight(0x80cabe,1.4);rim.position.set(100,120,-60);scene.add(rim);
+  const size=this.renderer.getSize(new T.Vector2()),color=this.renderer.getClearColor(new T.Color()).clone(),alpha=this.renderer.getClearAlpha();
+  try{
+   this.renderer.setSize(320,384,false);this.renderer.setClearColor(0x122824,1);this.renderer.render(scene,camera);
+   const portrait=this.canvas.toDataURL('image/png');this.portraits.set(id,portrait);return portrait;
+  }finally{
+   this.renderer.setSize(size.x,size.y,false);this.renderer.setClearColor(color,alpha);
+   // The clone shares geometry and materials with its street counterpart.
+   scene.remove(subject);
+  }
  }
  private makeProps(){
   const material=(color:number)=>new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide});
