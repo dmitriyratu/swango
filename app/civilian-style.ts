@@ -8,7 +8,7 @@ export const individuality:Record<string,{width:number;skin:[number,number,numbe
  ['visitor',.95,[1.04,.96,.88]],
 ].map(([id,width,skin])=>[id,{width,skin}])) as Record<string,{width:number;skin:[number,number,number]}>;
 export const wardrobe:Record<string,[string,string]>={
- swango:['#b58c42','#5e6765'],jun:['#657578','#343f42'],mara:['#458382','#555f62'],
+ swango:['#b58c42','#5e6765'],jun:['#465f65','#4b5355'],mara:['#458382','#555f62'],
  ivo:['#7a929a','#546e80'],nell:['#98526a','#747077'],commuter:['#73898a','#687177'],
  student:['#899579','#696d76'],shopper:['#bdad8e','#757d8c'],delivery:['#778ba0','#677b84'],
  'friend-a':['#9b7c6b','#5d6d74'],'friend-b':['#c3b39d','#72797d'],'late-shift':['#969886','#686a72'],visitor:['#7c627a','#62666f'],
@@ -24,8 +24,8 @@ export function shapeCivilian(model:T.Object3D,id:string,height:number){
    v.fromBufferAttribute(positions,i).applyMatrix4(o.matrixWorld);
    const waist=Math.exp(-Math.pow((v.y-height*.64)/(height*.13),2));
    const central=1-T.MathUtils.smoothstep(Math.abs(v.x),23,36);
-   const fullness=waist*central;v.x*=1+fullness*.26;
-   v.z+=fullness*(v.z>0?8: -2.5);
+   const fullness=waist*central;v.x*=1+fullness*.52;
+   v.z+=fullness*(v.z>0?11: -4);
    v.applyMatrix4(inverse);positions.setXYZ(i,v.x,v.y,v.z);
   }
   positions.needsUpdate=true;o.geometry.computeVertexNormals();o.geometry.computeBoundingBox();o.geometry.computeBoundingSphere();
@@ -42,15 +42,36 @@ export function dressCivilian(model:T.Object3D,id:string,height:number){
   local.decompose(mesh.position,mesh.quaternion,mesh.scale);bone.add(mesh);return mesh;
  };
  if(id==='jun'){
-  const apron=new T.PlaneGeometry(46,70,12,16),position=apron.attributes.position;
-  for(let i=0;i<position.count;i++){const x=position.getX(i),y=position.getY(i);position.setZ(i,Math.sin(x*.28)*.35-Math.pow(x/23,2)*9);position.setX(i,x*(1-y/220));}apron.computeVertexNormals();
-  attach('spine_02',apron,'#c8bda3',0,height*.59,24);
-  attach('spine_02',new T.PlaneGeometry(13,10),'#aa9e82',4,height*.58,25);
-  for(const x of [-11,11])attach('spine_03',new T.PlaneGeometry(2.1,24),'#c8bda3',x,height*.78,12);
-  const cap=attach('head',new T.SphereGeometry(10,20,10,0,Math.PI*2,0,Math.PI/2),'#344b4b',0,height-2,0);if(cap)cap.scale.y*=.6;
-  const bowl=new T.Group();bowl.name='RamenBowl';bowl.position.set(12,height*.65,34);
-  const ceramic=new T.Mesh(new T.SphereGeometry(9,24,12,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xd5ccb3,roughness:.45,side:T.DoubleSide}));ceramic.rotation.x=Math.PI;bowl.add(ceramic);
-  const broth=new T.Mesh(new T.CircleGeometry(8,24),new T.MeshStandardMaterial({color:0xac7b35,roughness:.38}));broth.rotation.x=-Math.PI/2;broth.position.y=-1;bowl.add(broth);model.add(bowl);
+  // A fitted bib narrows at the chest, rounds over the belly, then hangs in folds.
+  const apron=new T.PlaneGeometry(2,1,32,36),position=apron.attributes.position;
+  for(let i=0;i<position.count;i++){
+   const u=position.getX(i),v=position.getY(i)+.5;
+   const waist=T.MathUtils.smoothstep(v,.46,.84);
+   const width=T.MathUtils.lerp(27,15,waist);
+   const y=height*(.40+v*.39);
+   const belly=Math.exp(-Math.pow((y-height*.64)/(height*.13),2));
+   const depth=15+belly*12;
+   const folds=(1-T.MathUtils.smoothstep(v,.40,.70))*(Math.sin(u*14+1)*1.2+Math.sin(u*25)*.35);
+   position.setXYZ(i,u*width,y,depth-Math.pow(Math.abs(u),2)*13+folds);
+  }
+  apron.computeVertexNormals();
+  const cloth=attach('spine_02',apron,'#91836a',0,0,0);
+  if(cloth){
+   cloth.name='JunTailoredApron';
+   const pixels=new Uint8Array(128*128*4);let seed=17;
+   for(let i=0;i<128*128;i++){seed=(seed*1664525+1013904223)>>>0;const weave=(i%2)*5+(Math.floor(i/128)%2)*4,n=226+(seed%19)+weave;pixels.set([n,n-5,n-14,255],i*4);}
+   const texture=new T.DataTexture(pixels,128,128,T.RGBAFormat);texture.colorSpace=T.SRGBColorSpace;texture.needsUpdate=true;
+   (cloth.material as T.MeshStandardMaterial).map=texture;
+  }
+  for(const x of [-11,11]){
+   const points=[new T.Vector3(x,height*.775,17),new T.Vector3(x,height*.84,7),new T.Vector3(x,height*.82,-8)];
+   attach('spine_03',new T.TubeGeometry(new T.CatmullRomCurve3(points),12,1.25,5,false),'#7c705d',0,0,0);
+  }
+  const cap=attach('head',new T.SphereGeometry(10.4,24,14,0,Math.PI*2,0,Math.PI/2),'#314a50',0,height-4,0);if(cap)cap.scale.y*=.52;
+  const band=new T.CylinderGeometry(10.3,10.3,2.6,24,1,true);attach('head',band,'#293e43',0,height-3.8,0);
+  const bowl=new T.Group();bowl.name='RamenBowl';bowl.position.set(23,height*.60,30);
+  const ceramic=new T.Mesh(new T.SphereGeometry(7,24,12,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0x7b958b,roughness:.68,side:T.DoubleSide}));ceramic.rotation.x=Math.PI;bowl.add(ceramic);
+  const broth=new T.Mesh(new T.CircleGeometry(6.3,24),new T.MeshStandardMaterial({color:0x8c5b2a,roughness:.5}));broth.rotation.x=-Math.PI/2;broth.position.y=-1;bowl.add(broth);model.add(bowl);
  }
  if(id==='mara')attach('spine_03',new T.PlaneGeometry(7,3.8),'#d6c19b',-11,height*.76,13);
  if(id==='ivo')for(const x of [-12,12])attach('spine_03',new T.PlaneGeometry(2,28),'#bdbea8',x,height*.74,14);
@@ -96,8 +117,9 @@ export function dressCivilian(model:T.Object3D,id:string,height:number){
 export function poseCivilian(model:T.Object3D,id:string,activity:string,time:number){
  const h=model.userData.civilianHeight as number;
  if(id==='jun'){
-  reach(model,'l',new T.Vector3(17,h*.65-5,34));
-  reach(model,'r',new T.Vector3(5+Math.sin(time*1.15)*2,h*.69,34+Math.cos(time*1.15)*2));
+  reach(model,'l',new T.Vector3(25,h*.60-4,30));
+  // Keep the other arm at rest instead of making both hands orbit the bowl.
+  if(activity==='talk')reach(model,'r',new T.Vector3(-25,h*.55+Math.sin(time*.8),18));
  }else if(activity==='repair')reach(model,'r',new T.Vector3(-13,h*.63+Math.sin(time*1.2)*2,32));
  else if(activity==='talk')reach(model,'r',new T.Vector3(-22,h*.60+Math.sin(time*.8)*3,17));
 }
