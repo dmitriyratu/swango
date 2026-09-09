@@ -1,7 +1,7 @@
 import * as T from 'three';
 export const civilianNames=['eric','carla','claudia','manuel','nathan','sophia'];
 export const individuality:Record<string,{width:number;skin:[number,number,number]}>=Object.fromEntries([
- ['swango',1.02,[1.03,.98,.94]],['jun',1.09,[.95,.89,.81]],['mara',.98,[1.07,1.01,.96]],
+ ['swango',1.02,[1.03,.98,.94]],['jun',1,[.95,.89,.81]],['mara',.98,[1.07,1.01,.96]],
  ['ivo',1.06,[1.04,1.02,.98]],['nell',1.03,[.96,.91,.86]],['commuter',.94,[.84,.77,.69]],
  ['student',.95,[1.1,1.04,.98]],['shopper',1.08,[.93,.85,.77]],['delivery',.96,[.87,.79,.71]],
  ['friend-a',1.1,[1.08,1.01,.93]],['friend-b',1.04,[.93,.86,.79]],['late-shift',1.12,[1.12,1.05,.98]],
@@ -13,6 +13,24 @@ export const wardrobe:Record<string,[string,string]>={
  student:['#899579','#696d76'],shopper:['#bdad8e','#757d8c'],delivery:['#778ba0','#677b84'],
  'friend-a':['#9b7c6b','#5d6d74'],'friend-b':['#c3b39d','#72797d'],'late-shift':['#969886','#686a72'],visitor:['#7c627a','#62666f'],
 };
+// Round the torso in bind space; preserve the skeleton, hands, and limb lengths.
+export function shapeCivilian(model:T.Object3D,id:string,height:number){
+ if(id!=='jun')return;
+ model.updateMatrixWorld(true);
+ model.traverse(o=>{if(!(o instanceof T.SkinnedMesh))return;
+  o.geometry=o.geometry.clone();const positions=o.geometry.attributes.position;
+  const inverse=o.matrixWorld.clone().invert(),v=new T.Vector3();
+  for(let i=0;i<positions.count;i++){
+   v.fromBufferAttribute(positions,i).applyMatrix4(o.matrixWorld);
+   const waist=Math.exp(-Math.pow((v.y-height*.64)/(height*.13),2));
+   const central=1-T.MathUtils.smoothstep(Math.abs(v.x),23,36);
+   const fullness=waist*central;v.x*=1+fullness*.26;
+   v.z+=fullness*(v.z>0?8: -2.5);
+   v.applyMatrix4(inverse);positions.setXYZ(i,v.x,v.y,v.z);
+  }
+  positions.needsUpdate=true;o.geometry.computeVertexNormals();o.geometry.computeBoundingBox();o.geometry.computeBoundingSphere();
+ });
+}
 export function dressCivilian(model:T.Object3D,id:string,height:number){
  model.userData.civilianHeight=height;
  model.updateMatrixWorld(true);
@@ -24,13 +42,13 @@ export function dressCivilian(model:T.Object3D,id:string,height:number){
   local.decompose(mesh.position,mesh.quaternion,mesh.scale);bone.add(mesh);return mesh;
  };
  if(id==='jun'){
-  const apron=new T.PlaneGeometry(37,66,8,12),position=apron.attributes.position;
-  for(let i=0;i<position.count;i++){const x=position.getX(i),y=position.getY(i);position.setZ(i,Math.sin(x*.28)*.65-Math.abs(x)*.08);position.setX(i,x*(1-y/220));}apron.computeVertexNormals();
-  attach('spine_02',apron,'#c8bda3',0,height*.57,13);
-  attach('spine_02',new T.PlaneGeometry(13,10),'#aa9e82',4,height*.56,14);
+  const apron=new T.PlaneGeometry(46,70,12,16),position=apron.attributes.position;
+  for(let i=0;i<position.count;i++){const x=position.getX(i),y=position.getY(i);position.setZ(i,Math.sin(x*.28)*.35-Math.pow(x/23,2)*9);position.setX(i,x*(1-y/220));}apron.computeVertexNormals();
+  attach('spine_02',apron,'#c8bda3',0,height*.59,24);
+  attach('spine_02',new T.PlaneGeometry(13,10),'#aa9e82',4,height*.58,25);
   for(const x of [-11,11])attach('spine_03',new T.PlaneGeometry(2.1,24),'#c8bda3',x,height*.78,12);
   const cap=attach('head',new T.SphereGeometry(10,20,10,0,Math.PI*2,0,Math.PI/2),'#344b4b',0,height-2,0);if(cap)cap.scale.y*=.6;
-  const bowl=new T.Group();bowl.name='RamenBowl';bowl.position.set(14,height*.67,29);
+  const bowl=new T.Group();bowl.name='RamenBowl';bowl.position.set(12,height*.65,34);
   const ceramic=new T.Mesh(new T.SphereGeometry(9,24,12,0,Math.PI*2,0,Math.PI/2),new T.MeshStandardMaterial({color:0xd5ccb3,roughness:.45,side:T.DoubleSide}));ceramic.rotation.x=Math.PI;bowl.add(ceramic);
   const broth=new T.Mesh(new T.CircleGeometry(8,24),new T.MeshStandardMaterial({color:0xac7b35,roughness:.38}));broth.rotation.x=-Math.PI/2;broth.position.y=-1;bowl.add(broth);model.add(bowl);
  }
@@ -78,8 +96,8 @@ export function dressCivilian(model:T.Object3D,id:string,height:number){
 export function poseCivilian(model:T.Object3D,id:string,activity:string,time:number){
  const h=model.userData.civilianHeight as number;
  if(id==='jun'){
-  reach(model,'l',new T.Vector3(18,h*.67-4,28));
-  reach(model,'r',new T.Vector3(7+Math.sin(time*1.15)*3,h*.72,29+Math.cos(time*1.15)*3));
+  reach(model,'l',new T.Vector3(17,h*.65-5,34));
+  reach(model,'r',new T.Vector3(5+Math.sin(time*1.15)*2,h*.69,34+Math.cos(time*1.15)*2));
  }else if(activity==='repair')reach(model,'r',new T.Vector3(-13,h*.63+Math.sin(time*1.2)*2,32));
  else if(activity==='talk')reach(model,'r',new T.Vector3(-22,h*.60+Math.sin(time*.8)*3,17));
 }
@@ -88,9 +106,9 @@ function reach(model:T.Object3D,side:string,target:T.Vector3){
  model.updateWorldMatrix(true,true);target=model.localToWorld(target);
  const a=upper.getWorldPosition(new T.Vector3()),b=lower.getWorldPosition(new T.Vector3()),c=hand.getWorldPosition(new T.Vector3());
  const l1=a.distanceTo(b),l2=b.distanceTo(c),direction=target.clone().sub(a),distance=Math.min(direction.length(),(l1+l2)*.98);direction.normalize();
- const pole=new T.Vector3(side==='l'?1:-1,0,0).transformDirection(model.matrixWorld);pole.addScaledVector(direction,-pole.dot(direction)).normalize();
+ const pole=new T.Vector3(side==='l'?.35:-.35,-1,-.15).transformDirection(model.matrixWorld);pole.addScaledVector(direction,-pole.dot(direction)).normalize();
  const cosine=T.MathUtils.clamp((l1*l1+distance*distance-l2*l2)/(2*l1*distance),-1,1);
  const elbow=a.clone().addScaledVector(direction,l1*cosine).addScaledVector(pole,l1*Math.sqrt(1-cosine*cosine));
- const aim=(bone:T.Object3D,child:T.Object3D,point:T.Vector3)=>{const start=bone.getWorldPosition(new T.Vector3()),from=child.getWorldPosition(new T.Vector3()).sub(start).normalize(),to=point.clone().sub(start).normalize();const q=new T.Quaternion().setFromUnitVectors(from,to).multiply(bone.getWorldQuaternion(new T.Quaternion()));bone.quaternion.copy(bone.parent!.getWorldQuaternion(new T.Quaternion()).invert().multiply(q));bone.updateWorldMatrix(false,true);};
+ const aim=(bone:T.Object3D,child:T.Object3D,point:T.Vector3)=>{const start=bone.getWorldPosition(new T.Vector3()),from=child.getWorldPosition(new T.Vector3()).sub(start).normalize(),to=point.clone().sub(start).normalize();const q=new T.Quaternion().setFromUnitVectors(from,to).multiply(bone.getWorldQuaternion(new T.Quaternion()));bone.quaternion.copy(bone.parent!.getWorldQuaternion(new T.Quaternion()).invert().multiply(q)).normalize();bone.updateWorldMatrix(false,true);};
  aim(upper,lower,elbow);aim(lower,hand,target);
 }

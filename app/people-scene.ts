@@ -3,9 +3,9 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import type { Activity } from './street-life';
 import {setHeadPose} from './head-motion';
-import {civilianNames,wardrobe,individuality,dressCivilian,poseCivilian} from './civilian-style';
+import {civilianNames,wardrobe,individuality,dressCivilian,poseCivilian,shapeCivilian} from './civilian-style';
 export type ActorPose={id:string;model:string;x:number;y:number;height:number;vx:number;vy:number;face:number;activity:Activity;skin?:number;coat?:string;carrying?:boolean};
-type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D;headRest?:T.Quaternion};
+type Rig={group:T.Group;model:T.Object3D;mixer:T.AnimationMixer;walk:T.AnimationAction;idle:T.AnimationAction;face:number;height:number;head?:T.Object3D;headRest?:T.Quaternion;armBase:{bone:T.Object3D;rotation:T.Quaternion}[]};
 type Surface={map:T.Texture;normal:T.Texture;mask1:T.Texture;mask2:T.Texture};
 export class PeopleScene{
  readonly canvas:HTMLCanvasElement;
@@ -55,12 +55,14 @@ export class PeopleScene{
      `);
    };material.customProgramCacheKey=()=>`civilian-${p.id}`;o.material=material;
   }});
+  shapeCivilian(model,p.id,height);
   dressCivilian(model,p.id,height);
   model.scale.multiplyScalar(p.height/height);model.scale.x*=individuality[p.id]?.width??1;model.position.y-=bounds.min.y*(p.height/height);
   const head=model.getObjectByName('head'),headRest=head?.quaternion.clone();
   const mixer=new T.AnimationMixer(model),walk=mixer.clipAction(source.animations.find(a=>a.name==='Walk')!),idle=mixer.clipAction(source.animations.find(a=>a.name==='Idle')!);
   walk.play().setEffectiveWeight(0);idle.play().setEffectiveWeight(1);idle.time=(p.x*.031)%idle.getClip().duration;walk.time=(Math.abs(p.x)*.017)%walk.getClip().duration;mixer.update(0);
-  const rig={group,model,mixer,walk,idle,face:p.face,height:p.height,head,headRest};this.actors.set(p.id,rig);this.scene.add(group);return rig;
+  const armBase=['upperarm_l','lowerarm_l','upperarm_r','lowerarm_r'].flatMap(name=>{const bone=model.getObjectByName(name);return bone?[{bone,rotation:bone.quaternion.clone()}]:[];});
+  const rig={group,model,mixer,walk,idle,face:p.face,height:p.height,head,headRest,armBase};this.actors.set(p.id,rig);this.scene.add(group);return rig;
  }
  render(poses:ActorPose[],time:number,paused:boolean){
   const dt=paused?0:Math.min(.05,Math.max(0,time-this.lastTime));this.lastTime=time;
@@ -69,7 +71,9 @@ export class PeopleScene{
    const turn=Math.atan2(Math.sin(p.face-r.face),Math.cos(p.face-r.face));r.face+=turn*(1-Math.exp(-dt*7));r.group.rotation.y=r.face;
    const speed=Math.hypot(p.vx,p.vy*1.6),moving=p.activity==='walk'&&speed>.5;
    const weight=T.MathUtils.lerp(r.walk.getEffectiveWeight(),moving?1:0,1-Math.exp(-dt*9));r.walk.setEffectiveWeight(weight);r.idle.setEffectiveWeight(1-weight);
-   r.walk.timeScale=T.MathUtils.clamp(speed/(p.height*.53),.35,1.6);r.idle.timeScale=.72+(p.x%7)*.035;r.mixer.update(dt);
+   r.walk.timeScale=T.MathUtils.clamp(speed/(p.height*.53),.35,1.6);r.idle.timeScale=.72+(p.x%7)*.035;for(const a of r.armBase)a.bone.quaternion.copy(a.rotation);
+   r.mixer.update(dt);
+   for(const a of r.armBase)a.rotation.copy(a.bone.quaternion);
    poseCivilian(r.model,p.id,p.activity,time);
    if(r.head&&r.headRest)setHeadPose(r.head,r.headRest,time,p.id.length,['talk','serve','repair','shop'].includes(p.activity));
   }
